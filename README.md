@@ -4,7 +4,7 @@ Standalone Windows/Linux administration, Active Directory, diagnostics and recov
 
 **English** · [Español](README_ES.md)
 
-RabbitMole (formerly Audit Workbench) has [its own repository](https://github.com/sempitern0/RabbitMole). This repository maintains the six console assistants, with no PWA dependency.
+RabbitMole (formerly Audit Workbench) has [its own repository](https://github.com/sempitern0/RabbitMole). This repository maintains the console assistants, with no PWA dependency.
 
 ## Choose your task
 
@@ -16,6 +16,9 @@ RabbitMole (formerly Audit Workbench) has [its own repository](https://github.co
 | Join, diagnose or recover a Linux AD client | `linux-ad-client-assistant.sh --audit` |
 | Use the compatible RHEL-branded Linux client | `rhel-ad-client-assistant.sh --audit` |
 | Join, diagnose or recover a Windows AD client | `windows-ad-client-assistant.ps1 -Mode Audit` |
+| Plan OS upgrades or migrate files to Ubuntu/Nextcloud | `migration-assistant.ps1 -Mode Interactive` |
+
+See [migration scope, procedures and recovery](docs/MIGRATIONS.md).
 
 ## Start in minutes
 
@@ -45,7 +48,7 @@ powershell.exe -NoProfile -File .\windows-ad-client-assistant.ps1 -Mode Prefligh
 ```
 
 Use your organization's approved script execution/signing policy on Windows.
-All six root scripts are standalone downloads.
+All root scripts are standalone downloads.
 
 ## Deploy a verified revision
 

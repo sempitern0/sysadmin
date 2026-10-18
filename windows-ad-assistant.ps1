@@ -5174,6 +5174,7 @@ function Show-DomainMigrationMenu {
         Write-MenuItem '8' 'GPO migration backup' 'Back up all GPOs plus inventory' Good
         Write-MenuItem '9' 'Domain rename assessment' 'Inspect advanced rename capability without executing it' Warn
         Write-MenuItem '10' 'System-state backup' 'Create recovery-grade DC backup before migration work'
+        Write-MenuItem '11' 'OS and file migrations' 'Open standalone migration-assistant.ps1 (download alongside this script)'
         Write-MenuNavigation
         Write-Rule
 
@@ -5189,6 +5190,12 @@ function Show-DomainMigrationMenu {
             '8' { Export-GpoMigrationSet; Pause-ControlPlane }
             '9' { Show-DomainRenameAssessment; Pause-ControlPlane }
             '10' { Invoke-SystemStateBackup; Pause-ControlPlane }
+            '11' {
+                $companion = Join-Path $PSScriptRoot 'migration-assistant.ps1'
+                if (Test-Path -LiteralPath $companion) { & $companion -Mode Interactive }
+                else { Write-Console 'Download migration-assistant.ps1 from the same sysadmin revision, or run it standalone.' Yellow }
+                Pause-ControlPlane
+            }
             'H' { $script:MainMenuRequested = $true; return }
             '0' { return }
             default { Write-Console 'Invalid option.' Yellow; Pause-ControlPlane }

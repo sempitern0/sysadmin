@@ -45,7 +45,7 @@ foreach ($command in @('Test-PublicIpForGuardedIps','Test-ClientPublicIpCandidat
     }
     Assert-Equal $true (& $command '8.8.8.8') "$command public address"
 }
-$executable = (Get-Process -Id $PID).Path
+$executable = Join-Path $PSHOME $(if ($env:OS -eq 'Windows_NT') { if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } else { 'pwsh.exe' } } else { 'pwsh' })
 foreach ($file in @('windows-ad-assistant.ps1','windows-ad-client-assistant.ps1')) {
     $output = & $executable -NoProfile -NonInteractive -File (Join-Path $root $file) -Mode Preflight 2>&1
     $status = $LASTEXITCODE

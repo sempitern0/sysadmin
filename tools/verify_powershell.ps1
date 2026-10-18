@@ -20,3 +20,5 @@ foreach ($file in $files) {
 }
 if ($failed) { exit 1 }
 & (Join-Path $root 'tests/test_powershell.ps1')
+
+& (Join-Path $root 'tests/test_migrations.ps1')
