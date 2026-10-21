@@ -7,7 +7,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 
 if ($errors) {throw ($errors | Out-String)}
 foreach ($name in @('Get-OptionalProperty','Get-NativePowerShellPath','New-CompatibleLaunchCommand','Format-ConsoleText',
     'Get-ProfileDescription','Get-SettingCategory','Get-PlanSummary','Read-ConsoleChoice',
-    'Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
+    'Show-ConsoleCard','Show-ProfileChoices','Show-OperationChoices','Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
     $nodes=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true))
     if ($nodes.Count -ne 1) {throw "Missing function $name"}
     . ([scriptblock]::Create($nodes[0].Extent.Text))
@@ -83,4 +83,23 @@ param([string]$Profile,[string[]]$DisableStartupName,[switch]$Detailed)
     Assert-UI ($process.ExitCode -eq 1) 'Thrown child error returns failure'
     Assert-UI ($errorText -match '^Controlled launch failure' -and $errorText -match 'Origen:' -and $errorText -notmatch 'FromBase64String') 'Child errors show only the message, without encoded wrapper'
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }
+$widthFunction=${function:Get-ConsoleWidth}
+try {
+    foreach ($width in @(24,48,88)) {
+        $script:testWidth=$width
+        function Get-ConsoleWidth { return $script:testWidth }
+        $card=@(Show-ConsoleCard '[!] TEST' @('Long description '*12) 6>&1 | ForEach-Object {[string]$_})
+        Assert-UI (@($card | Where-Object {$_.Length -gt $width}).Count -eq 0) "Card fits $width columns"
+        Assert-UI (@($card | Where-Object {$_ -match '^\|.*\|$'}).Count -gt 1) 'Wrapped card retains borders'
+    }
+} finally { Set-Item Function:\Get-ConsoleWidth $widthFunction }
+foreach ($selected in @('Corporate','Academy','Legacy')) {
+    $menu=Show-ProfileChoices $selected 6>&1 | Out-String
+    Assert-UI (([regex]::Matches($menu,'ACTUAL / ENTER')).Count -eq 1) 'Exactly one default profile marked'
+    Assert-UI ($menu -match '\[1\]' -and $menu -match '\[2\]' -and $menu -match '\[3\]') 'Profiles have matching keyboard numbers'
+    Assert-UI ($menu -match '10 min' -and $menu -match '15 min' -and $menu -match 'Conserva SMB') 'Profile differences remain visible without color'
+    Assert-UI ($menu -notmatch '[^\x00-\x7f]') 'Profile icons remain ASCII for classic consoles'
+}
+$operations=Show-OperationChoices 6>&1 | Out-String
+Assert-UI ($operations -match 'No aplica ajustes' -and $operations -match 'antes de confirmar') 'Read-only and apply modes visibly distinguished'
 Write-Output "PASS: $checks workstation console and engine handoff checks"

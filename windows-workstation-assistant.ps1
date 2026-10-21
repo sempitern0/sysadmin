@@ -107,8 +107,45 @@ function Write-ConsoleMessage {
 function Show-ConsoleSection {
     param([string]$Title)
     Write-Host ''
-    Write-ConsoleMessage $Title 'Title'
-    Write-ConsoleMessage ('-' * [math]::Min(48,(Get-ConsoleWidth)))
+    Write-ConsoleMessage ('=' * (Get-ConsoleWidth)) 'Title'
+    Write-ConsoleMessage ('>> '+$Title) 'Title'
+    Write-ConsoleMessage ('=' * (Get-ConsoleWidth)) 'Title'
+}
+function Show-ConsoleCard {
+    param([string]$Title,[string[]]$Lines,[string]$Tone='Title')
+    $width=Get-ConsoleWidth
+    $inner=$width-4
+    $border='+'+('-'*($width-2))+'+'
+    Write-Host ''
+    Write-ConsoleMessage $border $Tone
+    foreach ($line in @(Format-ConsoleText $Title $inner)) {
+        Write-ConsoleMessage ('| '+$line.PadRight($inner)+' |') $Tone
+    }
+    Write-ConsoleMessage ('+'+('-'*($width-2))+'+') $Tone
+    foreach ($paragraph in $Lines) {
+        foreach ($line in @(Format-ConsoleText $paragraph $inner)) {
+            Write-ConsoleMessage ('| '+$line.PadRight($inner)+' |')
+        }
+    }
+    Write-ConsoleMessage $border $Tone
+}
+function Show-ProfileChoices {
+    param([string]$SelectedProfile)
+    foreach ($item in @(
+        @{Key='Corporate';Title='[1] [#] CORPORATIVO';Lines=@('USO     Puesto de trabajo de empresa.','SESION  Bloqueo tras 15 min en Windows 8.1+.','RED     Retira SMBv1. TLS antiguo: opcional.','REVISAR GPO/MDM, VPN y EDR; no sustituye politicas centrales.')},
+        @{Key='Academy';Title='[2] [=] ACADEMIA';Lines=@('USO     Equipos de alumnos y aulas.','SESION  Bloqueo tras 10 min en Windows 8.1+.','RED     Retira SMBv1. TLS antiguo: opcional.','CUENTAS Puedes crear una cuenta estandar; no restringe cuentas existentes.')},
+        @{Key='Legacy';Title='[3] [!] LEGADO';Lines=@('USO     Software antiguo que necesita compatibilidad.','SESION  15 min en Windows 8.1+; no ajusta bloqueo en Windows 7.','RED     Conserva SMB/TLS antiguos salvo opcion expresa.','REVISAR Aislamiento de red y prueba del software antes de aplicar.')}
+    )) {
+        $title=$item.Title; $tone='Title'
+        if ($item.Key -eq $SelectedProfile) { $title+='  < ACTUAL / ENTER'; $tone='OK' }
+        Show-ConsoleCard $title $item.Lines $tone
+    }
+    Write-ConsoleMessage '[i] Base comun: UAC, firewall, AutoRun y ajustes compatibles con la version.'
+    Write-ConsoleMessage '[i] Los perfiles no instalan software ni congelan el equipo.'
+}
+function Show-OperationChoices {
+    Show-ConsoleCard '[1] [?] AUDITAR  < PREDETERMINADO' @('Lee el estado y genera informes.','No aplica ajustes al sistema. Ideal para la primera pasada.') 'OK'
+    Show-ConsoleCard '[2] [>] PREPARAR Y APLICAR' @('Selecciona opciones y revisa el plan antes de confirmar.','Puede cambiar registro, energia, servicios y cuentas seleccionadas.') 'Warn'
 }
 function Get-ProfileDescription {
     param([string]$SelectedProfile)
@@ -159,6 +196,12 @@ function Show-WorkstationHeader {
 function Show-WorkstationPlan {
     param([object[]]$Observed,[bool]$PowerChange)
     Show-ConsoleSection 'PLAN / ANTES DE CONFIRMAR'
+    $pending=@($Observed | Where-Object {-not $_.Matches}).Count
+    Show-ConsoleCard '[>] RESUMEN DE AJUSTES' @(
+        ('[!] {0} valores pendientes de cambio' -f $pending),
+        ('[OK] {0} valores ya coinciden' -f (@($Observed).Count-$pending)),
+        '[i] Energia y cuentas se detallan aparte. Aun no se ha aplicado este plan.')
+    Write-ConsoleMessage '[OK] Coincide  |  [CAMBIO] Pendiente  |  [MANUAL] Revision del tecnico'
     foreach ($group in @(Get-PlanSummary $Observed)) {
         $tag='OK'; $tone='OK'
         if ($group.Pending) { $tag='CAMBIO'; $tone='Warn' }
@@ -565,22 +608,27 @@ if ([version]$inventory.Version -lt [version]'10.0' -and -not $PSBoundParameters
 if ($Mode -eq 'Interactive') {
     Show-WorkstationHeader $inventory $Profile
     Show-ConsoleSection '1 / PERFIL Y OPERACION'
-    foreach ($candidate in @('Corporate','Academy','Legacy')) { Write-ConsoleMessage (Get-ProfileDescription $candidate) }
+    Show-ProfileChoices $Profile
     $selection=Read-ConsoleChoice "Perfil: 1 Corporativo, 2 Academia, 3 Legado [Enter: $Profile]" @('1','2','3')
     switch ($selection) { '1' {$Profile='Corporate'} '2' {$Profile='Academy'} '3' {$Profile='Legacy'} }
     Write-ConsoleMessage (Get-ProfileDescription $Profile) 'Title'
+    Show-ConsoleSection 'OPERACION / QUE QUIERES HACER'
+    Show-OperationChoices
     $Mode='Audit'
     if ((Read-ConsoleChoice 'Operacion: 1 Auditar, 2 Preparar cambios [1]' @('1','2') '1') -eq '2') {
         $Mode='Apply'
         Show-ConsoleSection '2 / OPCIONES (ENTER CONSERVA EL VALOR ACTUAL)'
         Write-ConsoleMessage 'Solo responde S tras revisar la compatibilidad. Tambien se acepta Y.'
         foreach ($option in @(
-            @{Name='DisableLegacyProtocols';Text='Retirar SSL/TLS antiguos (puede afectar software legado)'},
-            @{Name='DisableOptionalServices';Text='Deshabilitar servicios Xbox/mapas'},
-            @{Name='UserExperience';Text="Reducir animaciones de $($inventory.User)"},
-            @{Name='CreateRestorePoint';Text='Solicitar punto de restauracion previo'})) {
+            @{Name='DisableLegacyProtocols';Text='[1/4] [!] PROTOCOLOS ANTIGUOS';Detail='Desactiva SSL 2/3 y TLS 1.0/1.1, habilita TLS 1.2 y retira SMBv1. Puede romper aplicaciones antiguas.'},
+            @{Name='DisableOptionalServices';Text='[2/4] [-] SERVICIOS OPCIONALES';Detail='Deshabilita servicios existentes de Xbox y mapas. Puede afectar juegos y mapas sin conexion.'},
+            @{Name='UserExperience';Text='[3/4] [~] EFECTOS VISUALES';Detail="Reduce animaciones y, en Windows 10/11, transparencia. Solo para $($inventory.User)."},
+            @{Name='CreateRestorePoint';Text='[4/4] [+] PUNTO DE RESTAURACION';Detail='Solicita un punto previo si Proteccion del sistema lo permite. No sustituye una copia de seguridad.'})) {
             $default='n'; if ([bool](Get-Variable -Name $option.Name -ValueOnly)) {$default='s'}
-            $answer=Read-ConsoleChoice ($option.Text+" [s/n; $default]") @('s','n','y') $default
+            $state='[ ] NO SELECCIONADO'; $tone='Title'
+            if ($default -eq 's') { $state='[x] SELECCIONADO'; $tone='OK' }
+            Show-ConsoleCard $option.Text @($option.Detail,($state+' | Enter conserva esta seleccion.')) $tone
+            $answer=Read-ConsoleChoice ("Activar esta opcion? [S] Si / [N] No / [Enter: $default]") @('s','n','y') $default
             Set-Variable -Name $option.Name -Value ($answer -in @('s','y'))
         }
         Show-ConsoleSection '3 / ARRANQUE Y CUENTAS'

@@ -207,3 +207,7 @@ final. Un fallo no se presenta como una ejecucion completa.
 El salto de motor muestra version, edicion de PowerShell, arquitectura y ejecutable de destino. El resumen del equipo muestra Windows, build, edicion y el estado de activacion y canal de licencia detectables (OEM, Retail, KMS o MAK), sin imprimir claves de producto. Si el proveedor de licencias no responde, se indica que el dato no esta disponible; no se interpreta como una licencia invalida. Los errores del proceso hijo incluyen archivo y linea de origen.
 
 La validacion incluye registros de inscripcion MDM vacios, propiedades ausentes, estados y canales de licencia y fallos del proveedor. La matriz CI de Windows PowerShell ejecuta ademas una consulta de inventario real de solo lectura; esto no sustituye la aceptacion de cambios y restauracion en equipos Windows cliente.
+
+### Lectura de la consola
+
+Los perfiles se presentan en tarjetas numeradas con diferencias de sesion, protocolos y uso. `< ACTUAL / ENTER` identifica la seleccion actual. Auditar y preparar cambios aparecen separados, con su efecto explicado antes de elegir. Cada opcion muestra su alcance y `[x]` seleccionada o `[ ]` no seleccionada. Los simbolos ASCII y etiquetas conservan el significado con `-NoColor`; las tarjetas se ajustan al ancho disponible.
