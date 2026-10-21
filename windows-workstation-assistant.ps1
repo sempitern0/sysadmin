@@ -342,6 +342,46 @@ function Get-PowerScheme {
     if (-not $match.Success) { throw 'Cannot identify active power scheme GUID.' }
     return $match.Value.ToLowerInvariant()
 }
+function Get-RecoveryHistory {
+    param([string]$Root,[string]$MachineId,[string]$UserSid)
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+    if ((Get-Item -LiteralPath $Root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'No se admite un directorio de recuperacion redirigido.' }
+    foreach ($directory in @(Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name -Descending)) {
+        if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        $path=Join-Path $directory.FullName 'state.clixml'
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        try {
+            $record=Import-Clixml -LiteralPath $path
+            if ($record.Schema -ne 1 -or $record.MachineId -ne $MachineId) { continue }
+            $pending=@($record.Entries | Where-Object {$_.Status -ne 'Restored' -and $_.Type -ne 'User'}).Count
+            $manual=@($record.Entries | Where-Object {$_.Type -eq 'User'}).Count
+            [pscustomobject]@{Path=$path;Created=$record.Created;Profile=$record.Profile;
+                Pending=$pending;Manual=$manual;Compatible=($record.UserSid -eq $UserSid);
+                UserSid=$record.UserSid;HasPoint=(Test-Path -LiteralPath (Join-Path $directory.FullName 'restore-point.clixml'))}
+        } catch { Write-Warning ("Diario omitido (no valido): {0}" -f $path) }
+    }
+}
+function Select-RecoverySnapshot {
+    param([object[]]$History)
+    $eligible=@($History | Where-Object {$_.Compatible -and $_.Pending -gt 0})
+    if (-not $eligible.Count) {
+        Write-ConsoleMessage '[i] No hay ajustes pendientes recuperables para este usuario.'
+        return ''
+    }
+    Write-ConsoleMessage '[!] Recupera primero la ejecucion mas reciente; despues puedes recuperar las anteriores.' 'Warn'
+    $number=0
+    foreach ($run in $eligible) {
+        $number++
+        Show-ConsoleCard ("[{0}] {1} / {2}" -f $number,$run.Created,$run.Profile) @(
+            ("Ajustes registrados pendientes: {0} | Cuentas para revision manual: {1}" -f $run.Pending,$run.Manual),
+            ('Diario: '+$run.Path))
+    }
+    $allowed=@('0')+@(1..$eligible.Count | ForEach-Object {[string]$_})
+    $choice=Read-ConsoleChoice 'Selecciona ejecucion [0 / Enter: cancelar]' $allowed '0'
+    if ($choice -eq '0') { return '' }
+    return $eligible[[int]$choice-1].Path
+}
 function Save-Journal {
     $script:Journal | Export-Clixml -LiteralPath "$script:JournalPath.tmp" -Depth 10
     Move-Item -LiteralPath "$script:JournalPath.tmp" -Destination $script:JournalPath -Force
@@ -577,8 +617,34 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 $machineId=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
 $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
+if ($Mode -eq 'Interactive' -or ($Mode -eq 'Restore' -and -not $SnapshotPath)) {
+    $history=@(Get-RecoveryHistory $StateRoot $machineId $userSid)
+    if ($history.Count -or $Mode -eq 'Restore') {
+        Show-ConsoleSection 'RECUPERACION / HISTORIAL DE ESTE EQUIPO'
+        Write-ConsoleMessage ("[i] {0} ejecuciones registradas en {1}" -f $history.Count,$StateRoot)
+        foreach ($run in @($history | Where-Object {-not $_.Compatible})) {
+            Write-ConsoleMessage ("[!] {0}: ejecutada por SID {1}. Inicia con ese usuario para recuperar sus ajustes HKCU." -f $run.Created,$run.UserSid) 'Warn'
+        }
+        Show-ConsoleCard '[1] [<] REVERTIR AJUSTES DEL SCRIPT' @('Recupera registro y plan de energia desde el diario previo.','Respeta cambios posteriores en conflicto. Conserva cuentas y datos.') 'OK'
+        Show-ConsoleCard '[2] [!] RESTAURACION DE WINDOWS' @('Abre el asistente de Windows para revisar puntos disponibles.','Puede revertir otras instalaciones y ajustes, no solo este script.','Windows solicita la seleccion y confirmacion; puede requerir reiniciar.') 'Warn'
+        $choice=Read-ConsoleChoice '[0] Continuar/salir  [1] Ajustes  [2] Windows [Enter: 0]' @('0','1','2') '0'
+        if ($choice -eq '2') {
+            $restoreUI=Join-Path $env:WINDIR 'System32/rstrui.exe'
+            if (-not (Test-Path -LiteralPath $restoreUI)) { throw 'Restauracion del sistema no esta disponible en este Windows.' }
+            if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Abrir el asistente de restauracion de Windows (seleccion y confirmacion en Windows)')) {
+                Start-Process -FilePath $restoreUI
+            }
+            return
+        }
+        if ($choice -eq '1') {
+            $SnapshotPath=Select-RecoverySnapshot $history
+            if ($SnapshotPath) { $Mode='Restore' }
+        }
+        if ($Mode -eq 'Restore' -and -not $SnapshotPath) { return }
+    }
+}
 if ($Mode -eq 'Restore') {
-    if (-not $SnapshotPath) { throw 'Specify -SnapshotPath state.clixml from this machine.' }
+    if (-not $SnapshotPath) { throw 'No hay diario seleccionado.' }
     $script:Journal=Import-Clixml -LiteralPath $SnapshotPath
     if ($Journal.Schema -ne 1 -or $Journal.MachineId -ne $machineId -or $Journal.UserSid -ne $userSid) { throw 'Snapshot version, machine or operator mismatch.' }
     Show-ConsoleSection 'RECUPERACION / AJUSTES REGISTRADOS'
@@ -586,17 +652,19 @@ if ($Mode -eq 'Restore') {
     Write-ConsoleMessage '[MANUAL] Las cuentas creadas se conservan. Los cambios posteriores se respetan.' 'Warn'
     if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Restaurar ajustes registrados; conservar cambios posteriores en conflicto')) { return }
     $script:JournalPath=[IO.Path]::GetFullPath($SnapshotPath)
-    $conflicts=0
+    $conflicts=0; $restored=0; $manual=0
     foreach ($entry in @($Journal.Entries | Sort-Object Index -Descending)) {
         try {
             $result=Restore-RecordedEntry $entry
             if ($result -eq 'Conflict') { $conflicts++; Write-Warning "Concurrent change preserved (entry $($entry.Index))."; continue }
             if ($result -eq 'ManualReview') {
-                Write-Warning "Account $($entry.Name) retained; review manually after preserving its data."
+                 $manual++; Write-Warning "Account $($entry.Name) retained; review manually after preserving its data."
             }
+            if ($result -eq 'Restored') { $restored++ }
             $entry.Status=$result; Save-Journal
         } catch { $conflicts++; Write-Warning $_.Exception.Message }
     }
+    Write-ConsoleMessage ("Recuperados: {0} | Conflictos/errores: {1} | Cuentas conservadas: {2}" -f $restored,$conflicts,$manual)
     if ($conflicts) { throw "$conflicts restore errors/conflicts. Review journal and retry only after resolving them." }
     Write-ConsoleMessage '[OK] Recuperacion de ajustes terminada. Reinicia y valida. Las cuentas se conservan.' 'OK'
     $global:LASTEXITCODE=0

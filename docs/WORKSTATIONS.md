@@ -91,3 +91,9 @@ and redirected output use plain text; lines wrap to the available console width.
 Menus retry invalid input and retain supplied options when Enter is pressed.
 The native-engine handoff preserves WhatIf, explicit Confirm false, arrays and
 literal quoted paths; Windows target/interactive acceptance remains a lab gate.
+
+### Discover previous runs and recover
+
+Interactive mode detects this machine's journals in StateRoot and offers recovery before starting a new preparation. `-Mode Restore` without SnapshotPath opens the same chooser. Select a run to restore recorded registry values and the previous power scheme; recover multiple runs newest first. Accounts and later conflicting changes are retained. HKCU recovery requires the original operator. Corrupt journals are reported and skipped, and completed entries are not offered as pending.
+
+The alternative opens Windows System Restore (`rstrui.exe`) for point selection and confirmation in Windows. This may affect unrelated applications and system settings. The script does not automatically restore or reboot. WhatIf prevents both configuration restoration and opening that wizard. Recovery requires surviving journals or Windows restore points; the prior state cannot be reliably inferred when both are lost.

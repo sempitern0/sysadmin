@@ -211,3 +211,12 @@ La validacion incluye registros de inscripcion MDM vacios, propiedades ausentes,
 ### Lectura de la consola
 
 Los perfiles se presentan en tarjetas numeradas con diferencias de sesion, protocolos y uso. `< ACTUAL / ENTER` identifica la seleccion actual. Auditar y preparar cambios aparecen separados, con su efecto explicado antes de elegir. Cada opcion muestra su alcance y `[x]` seleccionada o `[ ]` no seleccionada. Los simbolos ASCII y etiquetas conservan el significado con `-NoColor`; las tarjetas se ajustan al ancho disponible.
+
+### Detectar y revertir una preparacion anterior
+
+Al iniciar sin parametros, si hay diarios del equipo en `C:\ProgramData\WorkstationAssistant`, se ofrece recuperacion antes de preparar nuevos cambios. Tambien puedes abrirla directamente con `./windows-workstation-assistant.ps1 -Mode Restore`, sin buscar la ruta del diario. Usa `-StateRoot` si guardaste el historial en otro directorio.
+
+- **Revertir ajustes:** selecciona una ejecucion, preferentemente la mas reciente. Recupera los valores anteriores registrados y el plan de energia; verifica el resultado. No borra cuentas creadas ni sus datos. Los cambios posteriores en conflicto se conservan y se notifican. Para deshacer varias ejecuciones, recuperalas de mas reciente a mas antigua. Requiere el mismo equipo y usuario administrador original por los valores HKCU.
+- **Restauracion de Windows:** abre `rstrui.exe` para revisar los puntos realmente disponibles y confirmar alli. Puede revertir otros cambios de sistema y aplicaciones; no equivale a revertir solo este script. No selecciona puntos ni fuerza reinicios automaticamente.
+
+`-WhatIf` evita tanto las escrituras de recuperacion como abrir el asistente de Windows. Los diarios ya recuperados no aparecen como pendientes; los diarios corruptos se avisan y omiten. La deteccion depende de conservar el historial local: sin diario ni punto de restauracion no se puede reconstruir con fiabilidad el estado anterior. Que exista `restore-point.clixml` no garantiza que Windows conserve aquel punto.
