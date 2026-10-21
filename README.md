@@ -17,6 +17,7 @@ RabbitMole (formerly Audit Workbench) has [its own repository](https://github.co
 | Use the compatible RHEL-branded Linux client | `rhel-ad-client-assistant.sh --audit` |
 | Join, diagnose or recover a Windows AD client | `windows-ad-client-assistant.ps1 -Mode Audit` |
 | Plan OS upgrades or migrate files to Ubuntu/Nextcloud | `migration-assistant.ps1 -Mode Interactive` |
+| Prepare corporate, classroom or legacy Windows workstations | `windows-workstation-assistant.ps1 -Mode Audit` |
 
 See [migration scope, procedures and recovery](docs/MIGRATIONS.md).
 
@@ -79,3 +80,5 @@ python3 tools/verify.py --require-shellcheck --require-powershell
 ```
 
 [MIT license](LICENSE).
+
+[Windows workstation preparation guide](docs/WORKSTATIONS.md).

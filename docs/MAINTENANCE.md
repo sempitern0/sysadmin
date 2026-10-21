@@ -4,7 +4,7 @@
 
 ## Standalone scripts
 
-Keep all six assistants at the repository root, independently downloadable. Do not introduce runtime imports or network downloads for shared helpers. Edit `linux-ad-client-assistant.sh` as the canonical Linux client, then regenerate its RHEL-branded sibling:
+Keep all standalone assistants at the repository root, independently downloadable. Do not introduce runtime imports or network downloads for shared helpers. Edit `linux-ad-client-assistant.sh` as the canonical Linux client, then regenerate its RHEL-branded sibling:
 
 ```bash
 python3 tools/sync_linux_clients.py
@@ -66,3 +66,7 @@ Before approving a production change, exercise preflight → audit → change �
 - Made three Windows Server scheduled operation modes propagate caught errors instead of returning apparent success.
 - Added offline regression tests, PowerShell engine CI coverage and revision/checksum deployment packages.
 - Documented launch paths, role boundaries, SSH terminal requirements and lab acceptance in English and Spanish.
+
+Workstation regression tests (`tests/test_workstations.ps1`) import only allowlisted
+functions and mock all system writes. They cover per-edition plans, journal-before-write,
+idempotency and conflict-safe recovery; live Windows 7/8.1/10/11 acceptance remains required.
