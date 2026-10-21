@@ -75,5 +75,12 @@ param([string]$Profile,[string[]]$DisableStartupName,[switch]$Detailed)
     $encoded=New-CompatibleLaunchCommand $fixture @{}
     & $exe -NoProfile -EncodedCommand $encoded
     Assert-UI ($LASTEXITCODE -eq 7) 'Explicit child failure code retained'
+    'throw "Controlled launch failure"' | Set-Content -LiteralPath $fixture -Encoding UTF8
+    $encoded=New-CompatibleLaunchCommand $fixture @{}
+    $stderr=Join-Path $temp 'stderr.txt'
+    $process=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-OutputFormat','Text','-EncodedCommand',$encoded) -RedirectStandardError $stderr -Wait -PassThru
+    $errorText=Get-Content -LiteralPath $stderr -Raw
+    Assert-UI ($process.ExitCode -eq 1) 'Thrown child error returns failure'
+    Assert-UI ($errorText.Trim() -eq 'Controlled launch failure') 'Child errors show only the message, without encoded wrapper'
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }
 Write-Output "PASS: $checks workstation console and engine handoff checks"

@@ -42,7 +42,7 @@ function New-CompatibleLaunchCommand {
     # Serialize as data, not shell text. No execution-policy bypass or temp file.
     $payload=[Management.Automation.PSSerializer]::Serialize(@{Path=$ScriptPath;Parameters=$Parameters})
     $data=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
-    $command='$data=[Management.Automation.PSSerializer]::Deserialize([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('''+$data+'''))); $p=@{}; foreach($k in $data.Parameters.Keys){$p[$k]=$data.Parameters[$k]}; $global:LASTEXITCODE=0; try { & $data.Path @p; $ok=$?; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; if(-not $ok){exit 1} } catch { Write-Error $_; exit 1 }'
+    $command='$data=[Management.Automation.PSSerializer]::Deserialize([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('''+$data+'''))); $p=@{}; foreach($k in $data.Parameters.Keys){$p[$k]=$data.Parameters[$k]}; $global:LASTEXITCODE=0; try { & $data.Path @p; $ok=$?; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; if(-not $ok){exit 1} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }'
     return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 }
 function Get-ConsoleWidth {
@@ -492,7 +492,10 @@ if ($Mode -eq 'Preflight') {
 if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') { throw 'Run with Windows PowerShell 5.1 (powershell.exe), not PowerShell 7.' }
 if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell to avoid redirected registry views.' }
 $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Open an elevated Windows PowerShell console. Preflight needs no elevation.' }
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-ConsoleMessage 'Abre PowerShell o Terminal con Ejecutar como administrador y vuelve a lanzar este script. Para comprobar el entorno sin elevacion, usa -Mode Preflight.' 'Warn'
+    exit 1
+}
 $machineId=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
 $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
