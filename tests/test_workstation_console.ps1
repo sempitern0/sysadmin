@@ -5,7 +5,7 @@ $root=Split-Path -Parent $PSScriptRoot
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'windows-workstation-assistant.ps1'),[ref]$tokens,[ref]$errors)
 if ($errors) {throw ($errors | Out-String)}
-foreach ($name in @('Get-NativePowerShellPath','New-CompatibleLaunchCommand','Format-ConsoleText',
+foreach ($name in @('Get-OptionalProperty','Get-NativePowerShellPath','New-CompatibleLaunchCommand','Format-ConsoleText',
     'Get-ProfileDescription','Get-SettingCategory','Get-PlanSummary','Read-ConsoleChoice',
     'Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
     $nodes=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true))
@@ -81,6 +81,6 @@ param([string]$Profile,[string[]]$DisableStartupName,[switch]$Detailed)
     $process=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-OutputFormat','Text','-EncodedCommand',$encoded) -RedirectStandardError $stderr -Wait -PassThru
     $errorText=Get-Content -LiteralPath $stderr -Raw
     Assert-UI ($process.ExitCode -eq 1) 'Thrown child error returns failure'
-    Assert-UI ($errorText.Trim() -eq 'Controlled launch failure') 'Child errors show only the message, without encoded wrapper'
+    Assert-UI ($errorText -match '^Controlled launch failure' -and $errorText -match 'Origen:' -and $errorText -notmatch 'FromBase64String') 'Child errors show only the message, without encoded wrapper'
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }
 Write-Output "PASS: $checks workstation console and engine handoff checks"

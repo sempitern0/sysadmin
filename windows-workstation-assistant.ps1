@@ -31,6 +31,37 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
+function Get-OptionalProperty {
+    param($Object,[string]$Name,$Default='No disponible')
+    if ($null -eq $Object) { return $Default }
+    $property=$Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value -or [string]$property.Value -eq '') { return $Default }
+    return $property.Value
+}
+function Test-EnrollmentRecord {
+    param($Record)
+    # Empty registry keys can yield no object. Never enumerate .Properties.Name.
+    return ($null -ne $Record -and $null -ne $Record.PSObject.Properties['EnrollmentType'])
+}
+function Get-WindowsLicenseSummary {
+    try {
+        $products=@(Get-WmiObject SoftwareLicensingProduct -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" -ErrorAction Stop)
+        $results=@(foreach ($product in $products) {
+            $status=Get-OptionalProperty $product 'LicenseStatus' -1
+            $states=@{0='Sin licencia';1='Activado';2='Periodo de gracia inicial';3='Periodo de gracia adicional';4='No genuino (gracia)';5='Notificacion';6='Gracia extendida'}
+            $label='Desconocido'; if ($states.ContainsKey([int]$status)) { $label=$states[[int]$status] }
+            $description=[string](Get-OptionalProperty $product 'Description' '')
+            $channel='Canal no disponible'
+            if ($description -match '(?i)OEM') { $channel='OEM' }
+            elseif ($description -match '(?i)VOLUME_KMS') { $channel='Volumen / KMS' }
+            elseif ($description -match '(?i)VOLUME_MAK') { $channel='Volumen / MAK' }
+            elseif ($description -match '(?i)RETAIL') { $channel='Retail' }
+            '{0}: {1} | {2}' -f (Get-OptionalProperty $product 'Name' 'Windows'),$label,$channel
+        })
+        if (-not $results.Count) { return 'No disponible: sin producto Windows con clave instalada detectable' }
+        return ($results -join '; ')
+    } catch { return 'No disponible: fallo al consultar el servicio de licencias' }
+}
 function Get-NativePowerShellPath {
     param([string]$WindowsDirectory, [bool]$Is64BitOS, [bool]$Is64BitProcess)
     $folder='System32'
@@ -42,7 +73,7 @@ function New-CompatibleLaunchCommand {
     # Serialize as data, not shell text. No execution-policy bypass or temp file.
     $payload=[Management.Automation.PSSerializer]::Serialize(@{Path=$ScriptPath;Parameters=$Parameters})
     $data=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
-    $command='$data=[Management.Automation.PSSerializer]::Deserialize([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('''+$data+'''))); $p=@{}; foreach($k in $data.Parameters.Keys){$p[$k]=$data.Parameters[$k]}; $global:LASTEXITCODE=0; try { & $data.Path @p; $ok=$?; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; if(-not $ok){exit 1} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }'
+    $command='$data=[Management.Automation.PSSerializer]::Deserialize([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('''+$data+'''))); $p=@{}; foreach($k in $data.Parameters.Keys){$p[$k]=$data.Parameters[$k]}; $global:LASTEXITCODE=0; try { & $data.Path @p; $ok=$?; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; if(-not $ok){exit 1} } catch { [Console]::Error.WriteLine($_.Exception.Message); if ($_.InvocationInfo.ScriptName) { [Console]::Error.WriteLine(("Origen: {0}:{1}" -f $_.InvocationInfo.ScriptName,$_.InvocationInfo.ScriptLineNumber)) }; exit 1 }'
     return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 }
 function Get-ConsoleWidth {
@@ -119,6 +150,8 @@ function Show-WorkstationHeader {
     Write-ConsoleMessage (Get-ProfileDescription $SelectedProfile) 'Title'
     Write-ConsoleMessage ("Equipo: {0} | {1} {2} | {3}" -f $Inventory.Computer,$Inventory.Manufacturer,$Inventory.Model,$Inventory.Device)
     Write-ConsoleMessage ("Sistema: {0} | build {1} | {2}" -f $Inventory.OS,$Inventory.Build,$Inventory.Edition)
+    Write-ConsoleMessage ("Licencia Windows: {0}" -f (Get-OptionalProperty $Inventory 'License'))
+    Write-ConsoleMessage ("Motor: PowerShell {0} / {1} | Proceso: {2} bits" -f $PSVersionTable.PSVersion,$PSVersionTable.PSEdition,([IntPtr]::Size*8))
     Write-ConsoleMessage ("Usuario de ejecucion: {0}" -f $Inventory.User)
     if ($Inventory.Managed) { Write-ConsoleMessage '[REVISION] Equipo gestionado: las politicas centrales tienen prioridad.' 'Warn' }
     Write-ConsoleMessage 'La auditoria observa valores; no certifica cumplimiento ni efectividad tras reinicio.'
@@ -319,7 +352,7 @@ function Get-WorkstationInventory {
     if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Enrollments') {
         $enrollments=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments' | Where-Object {
             $data=Get-ItemProperty $_.PSPath
-            $data.PSObject.Properties.Name -contains 'EnrollmentType'
+            Test-EnrollmentRecord $data
         })
         if ($enrollments.Count) { $managed=$true }
     }
@@ -334,6 +367,7 @@ function Get-WorkstationInventory {
     [pscustomobject]@{
         Computer=$env:COMPUTERNAME; OS=$os.Caption; Version=[string]$os.Version
         Build=$os.BuildNumber; ProductType=[int]$os.ProductType; ServicePack=[int]$os.ServicePackMajorVersion
+        License=Get-WindowsLicenseSummary
         Edition=$edition; Manufacturer=$computer.Manufacturer; Model=$computer.Model
         Device=Get-DeviceKind @($chassis.ChassisTypes) ([int]$computer.PCSystemType)
         BIOS=$bios.SMBIOSBIOSVersion; Managed=$managed; Domain=$computer.Domain
@@ -470,7 +504,8 @@ if ($env:OS -eq 'Windows_NT' -and ($PSVersionTable.PSEdition -ne 'Desktop' -or
     $native=Get-NativePowerShellPath $env:WINDIR ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
     if (-not (Test-Path -LiteralPath $native)) { throw "Windows PowerShell no disponible: $native. Revisa los componentes de Windows." }
     if (-not $PSCommandPath) { throw 'Guarda el script como archivo .ps1 antes de ejecutarlo.' }
-    Write-ConsoleMessage '[INFO] Entorno detectado: continuando automaticamente en Windows PowerShell nativo.' 'Title'
+    Write-ConsoleMessage ("[MOTOR] PowerShell {0} / {1} / {2} bits -> Windows PowerShell nativo: {3}" -f $PSVersionTable.PSVersion,$PSVersionTable.PSEdition,([IntPtr]::Size*8),$native) 'Title'
+    Write-ConsoleMessage 'El motor nativo consultara Windows, hardware y licencia antes de mostrar el asistente.' 
     $parameters=@{}
     foreach ($key in $PSBoundParameters.Keys) {
         $value=$PSBoundParameters[$key]

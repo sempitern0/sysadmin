@@ -26,3 +26,5 @@ if ($failed) { exit 1 }
 & (Join-Path $root 'tests/test_workstations.ps1')
 
 & (Join-Path $root 'tests/test_workstation_console.ps1')
+
+& (Join-Path $root 'tests/test_workstation_inventory.ps1')
