@@ -21,6 +21,8 @@ param(
     [switch]$UserExperience,
     [switch]$CreateRestorePoint,
     [switch]$AllowManaged,
+    [switch]$NoColor,
+    [switch]$Detailed,
     [string[]]$DisableStartupName=@(),
     [ValidatePattern('^$|^[a-zA-Z][a-zA-Z0-9_-]{0,19}$')][string]$StandardUserName='',
     [string]$SnapshotPath,
@@ -28,6 +30,132 @@ param(
 )
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
+
+function Get-NativePowerShellPath {
+    param([string]$WindowsDirectory, [bool]$Is64BitOS, [bool]$Is64BitProcess)
+    $folder='System32'
+    if ($Is64BitOS -and -not $Is64BitProcess) { $folder='Sysnative' }
+    return Join-Path $WindowsDirectory "$folder\WindowsPowerShell\v1.0\powershell.exe"
+}
+function New-CompatibleLaunchCommand {
+    param([string]$ScriptPath, [hashtable]$Parameters)
+    # Serialize as data, not shell text. No execution-policy bypass or temp file.
+    $payload=[Management.Automation.PSSerializer]::Serialize(@{Path=$ScriptPath;Parameters=$Parameters})
+    $data=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    $command='$data=[Management.Automation.PSSerializer]::Deserialize([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('''+$data+'''))); $p=@{}; foreach($k in $data.Parameters.Keys){$p[$k]=$data.Parameters[$k]}; $global:LASTEXITCODE=0; try { & $data.Path @p; $ok=$?; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; if(-not $ok){exit 1} } catch { Write-Error $_; exit 1 }'
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+}
+function Get-ConsoleWidth {
+    try { return [math]::Max(24,[math]::Min(100,$Host.UI.RawUI.WindowSize.Width-1)) }
+    catch { return 88 }
+}
+function Format-ConsoleText {
+    param([string]$Text, [int]$Width=88)
+    $Width=[math]::Max(12,$Width)
+    # Prevent names imported from the machine from injecting terminal control codes.
+    $clean=$Text -replace '[\x00-\x1f\x7f]',' '
+    while ($clean.Length -gt $Width) {
+        $cut=$clean.LastIndexOf(' ',$Width)
+        if ($cut -lt 1) { $cut=$Width }
+        $clean.Substring(0,$cut)
+        $clean=$clean.Substring($cut).TrimStart()
+    }
+    if ($clean.Length) { $clean }
+}
+function Write-ConsoleMessage {
+    param([string]$Text, [ValidateSet('Info','Title','OK','Warn')][string]$Tone='Info')
+    $useColor=-not $NoColor -and -not (Test-Path Env:NO_COLOR)
+    try { if ([Console]::IsOutputRedirected) { $useColor=$false } } catch { $useColor=$false }
+    foreach ($line in @(Format-ConsoleText $Text (Get-ConsoleWidth))) {
+        if ($useColor -and $Tone -ne 'Info') {
+            $color=@{Title='Cyan';OK='Green';Warn='Yellow'}[$Tone]
+            Write-Host $line -ForegroundColor $color
+        } else { Write-Host $line }
+    }
+}
+function Show-ConsoleSection {
+    param([string]$Title)
+    Write-Host ''
+    Write-ConsoleMessage $Title 'Title'
+    Write-ConsoleMessage ('-' * [math]::Min(48,(Get-ConsoleWidth)))
+}
+function Get-ProfileDescription {
+    param([string]$SelectedProfile)
+    switch ($SelectedProfile) {
+        'Corporate' { return 'CORPORATIVO | Puesto de trabajo. Revisar GPO/MDM, VPN y EDR. Bloqueo: 15 min en Windows 8.1+.' }
+        'Academy' { return 'ACADEMIA | Alumnos con cuenta estandar, profesores separados. Bloqueo: 10 min en Windows 8.1+.' }
+        'Legacy' { return 'LEGADO | Prioridad a compatibilidad. SMB/TLS antiguos se conservan salvo seleccion explicita. Revisar aislamiento de red.' }
+    }
+}
+function Get-SettingCategory {
+    param($Item)
+    if ($Item.Kind -eq 'Delete') { return 'Aplicaciones de inicio' }
+    if ($Item.Path -match 'SCHANNEL|mrxsmb|Lanman') { return 'Protocolos de red' }
+    if ($Item.Path -match 'DataCollection|CloudContent|AdvertisingInfo') { return 'Privacidad' }
+    if ($Item.Path -match '^HKCU:') { return 'Aspecto del usuario actual' }
+    if ($Item.Name -eq 'HiberbootEnabled') { return 'Inicio rapido de Windows' }
+    if ($Item.Name -eq 'Start') { return 'Servicios opcionales' }
+    return 'Seguridad y sesiones'
+}
+function Get-PlanSummary {
+    param([object[]]$Observed)
+    foreach ($group in @($Observed | Group-Object Category)) {
+        $pending=@($group.Group | Where-Object {-not $_.Matches}).Count
+        [pscustomobject]@{Category=$group.Name;Pending=$pending;Matching=($group.Count-$pending)}
+    }
+}
+function Read-ConsoleChoice {
+    param([string]$Prompt,[string[]]$Allowed,[string]$Default='')
+    while ($true) {
+        $answer=(Read-Host $Prompt).Trim()
+        if ($answer -eq '') { return $Default }
+        if ($answer -in $Allowed) { return $answer }
+        Write-ConsoleMessage ('[AVISO] Respuesta no valida. Opciones: '+($Allowed -join ', ')+'.') 'Warn'
+    }
+}
+function Show-WorkstationHeader {
+    param($Inventory,[string]$SelectedProfile)
+    Show-ConsoleSection 'SYSADMIN / PREPARACION DE EQUIPOS'
+    Write-ConsoleMessage (Get-ProfileDescription $SelectedProfile) 'Title'
+    Write-ConsoleMessage ("Equipo: {0} | {1} {2} | {3}" -f $Inventory.Computer,$Inventory.Manufacturer,$Inventory.Model,$Inventory.Device)
+    Write-ConsoleMessage ("Sistema: {0} | build {1} | {2}" -f $Inventory.OS,$Inventory.Build,$Inventory.Edition)
+    Write-ConsoleMessage ("Usuario de ejecucion: {0}" -f $Inventory.User)
+    if ($Inventory.Managed) { Write-ConsoleMessage '[REVISION] Equipo gestionado: las politicas centrales tienen prioridad.' 'Warn' }
+    Write-ConsoleMessage 'La auditoria observa valores; no certifica cumplimiento ni efectividad tras reinicio.'
+}
+function Show-WorkstationPlan {
+    param([object[]]$Observed,[bool]$PowerChange)
+    Show-ConsoleSection 'PLAN / ANTES DE CONFIRMAR'
+    foreach ($group in @(Get-PlanSummary $Observed)) {
+        $tag='OK'; $tone='OK'
+        if ($group.Pending) { $tag='CAMBIO'; $tone='Warn' }
+        Write-ConsoleMessage ("[{0}] {1}: {2} pendientes / {3} valores coincidentes" -f $tag,$group.Category,$group.Pending,$group.Matching) $tone
+    }
+    if ($PowerChange) { Write-ConsoleMessage '[CAMBIO] Energia: seleccionar Equilibrado; conservar tiempos y ajustes existentes.' 'Warn' }
+    else { Write-ConsoleMessage '[OK] Energia: Equilibrado ya seleccionado.' 'OK' }
+    if ($StandardUserName) { Write-ConsoleMessage "[CAMBIO] Nueva cuenta estandar: $StandardUserName (password solicitado al crearla)." 'Warn' }
+    Write-ConsoleMessage '[ALCANCE] Animaciones: solo el usuario ejecutor. Servicios/SMB: comprobar despues de reiniciar.'
+    Write-ConsoleMessage '[MANUAL] Firmware, permisos de carpetas, cuotas de restauracion y prueba de aplicaciones.'
+    if ($Detailed) {
+        Show-ConsoleSection 'DETALLE TECNICO / SIN MOSTRAR COMANDOS DE ARRANQUE'
+        foreach ($item in $Observed) {
+            $tag='CAMBIO'; if ($item.Matches) { $tag='OK' }
+            Write-ConsoleMessage "[$tag] $($item.Path) / $($item.Name)"
+        }
+    } else { Write-ConsoleMessage 'Usa -Detailed para ver rutas y nombres de valores. El informe conserva el detalle.' }
+}
+function Show-RunResult {
+    param([string]$RunDirectory,[string]$Result,[int]$Applied=0)
+    Show-ConsoleSection "RESULTADO / $Result"
+    if ($Result -eq 'AUDITORIA') { Write-ConsoleMessage '[OK] Auditoria terminada. No se han cambiado ajustes del sistema.' 'OK' }
+    else {
+        Write-ConsoleMessage "[OK] $Applied operaciones registradas y aplicadas." 'OK'
+        Write-ConsoleMessage '[PENDIENTE] Reiniciar manualmente y comprobar aplicaciones, red y politica efectiva.' 'Warn'
+    }
+    Write-ConsoleMessage "Informes: $RunDirectory"
+    Write-ConsoleMessage 'diagnostics.txt: estado del equipo | manual-checklist.txt: tareas de entrega'
+    if ($Result -ne 'AUDITORIA') { Write-ConsoleMessage 'state.clixml: recuperar con -Mode Restore -SnapshotPath (las cuentas se conservan).' }
+}
 
 function Get-DeviceKind {
     param([int[]]$Chassis, [int]$PCSystemType)
@@ -336,9 +464,27 @@ Executing user: $($Inventory.User). HKCU changes affect ONLY this account, not a
     $text | Set-Content -LiteralPath $Destination -Encoding UTF8
 }
 
+# Preserve the native Windows APIs while accepting launch from PowerShell 7/x86.
+if ($env:OS -eq 'Windows_NT' -and ($PSVersionTable.PSEdition -ne 'Desktop' -or
+    ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess))) {
+    $native=Get-NativePowerShellPath $env:WINDIR ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
+    if (-not (Test-Path -LiteralPath $native)) { throw "Windows PowerShell no disponible: $native. Revisa los componentes de Windows." }
+    if (-not $PSCommandPath) { throw 'Guarda el script como archivo .ps1 antes de ejecutarlo.' }
+    Write-ConsoleMessage '[INFO] Entorno detectado: continuando automaticamente en Windows PowerShell nativo.' 'Title'
+    $parameters=@{}
+    foreach ($key in $PSBoundParameters.Keys) {
+        $value=$PSBoundParameters[$key]
+        if ($value -is [Management.Automation.SwitchParameter]) { $value=[bool]$value }
+        $parameters[$key]=$value
+    }
+    if ($WhatIfPreference) { $parameters['WhatIf']=$true }
+    $encoded=New-CompatibleLaunchCommand $PSCommandPath $parameters
+    & $native -NoProfile -OutputFormat Text -EncodedCommand $encoded
+    exit $LASTEXITCODE
+}
 if ($Mode -eq 'Preflight') {
     Write-Output "PowerShell: $($PSVersionTable.PSVersion) / $($PSVersionTable.PSEdition)"
-    Write-Output 'Requires Windows PowerShell 5.1 (Desktop), Windows 7 SP1 or later client OS; Apply requires elevation.'
+    Write-Output 'Uses native Windows PowerShell 5.1 automatically; Windows 7 SP1 or later client OS; Apply requires elevation.'
     Write-Output 'No changes made.'
     if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') { exit 1 }
     exit 0
@@ -354,7 +500,10 @@ if ($Mode -eq 'Restore') {
     if (-not $SnapshotPath) { throw 'Specify -SnapshotPath state.clixml from this machine.' }
     $script:Journal=Import-Clixml -LiteralPath $SnapshotPath
     if ($Journal.Schema -ne 1 -or $Journal.MachineId -ne $machineId -or $Journal.UserSid -ne $userSid) { throw 'Snapshot version, machine or operator mismatch.' }
-    if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Restore recorded settings; preserve subsequent conflicting edits')) { return }
+    Show-ConsoleSection 'RECUPERACION / AJUSTES REGISTRADOS'
+    Write-ConsoleMessage "Diario: $SnapshotPath | Entradas: $(@($Journal.Entries).Count)"
+    Write-ConsoleMessage '[MANUAL] Las cuentas creadas se conservan. Los cambios posteriores se respetan.' 'Warn'
+    if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Restaurar ajustes registrados; conservar cambios posteriores en conflicto')) { return }
     $script:JournalPath=[IO.Path]::GetFullPath($SnapshotPath)
     $conflicts=0
     foreach ($entry in @($Journal.Entries | Sort-Object Index -Descending)) {
@@ -368,30 +517,48 @@ if ($Mode -eq 'Restore') {
         } catch { $conflicts++; Write-Warning $_.Exception.Message }
     }
     if ($conflicts) { throw "$conflicts restore errors/conflicts. Review journal and retry only after resolving them." }
-    Write-Output 'Recorded settings restored. Reboot and validate; created accounts are retained.'
+    Write-ConsoleMessage '[OK] Recuperacion de ajustes terminada. Reinicia y valida. Las cuentas se conservan.' 'OK'
+    $global:LASTEXITCODE=0
     return
 }
 $inventory=Get-WorkstationInventory
 if (-not (Test-WorkstationVersion ([version]$inventory.Version) $inventory.ProductType $inventory.ServicePack)) { throw 'Only Windows 7 SP1 through Windows 11 client editions are supported.' }
 if ([version]$inventory.Version -lt [version]'10.0' -and -not $PSBoundParameters.ContainsKey('Profile')) { $Profile='Legacy' }
 if ($Mode -eq 'Interactive') {
-    Write-Host ('{0} | {1} {2} | {3}' -f $inventory.OS,$inventory.Manufacturer,$inventory.Model,$inventory.Device)
-    $selection=Read-Host "Profile: 1 Corporate, 2 Academy, 3 Legacy (Enter keeps $Profile)"
-    switch ($selection) { '2' {$Profile='Academy'} '3' {$Profile='Legacy'} '' {} '1' {$Profile='Corporate'} default {throw 'Invalid profile.'} }
+    Show-WorkstationHeader $inventory $Profile
+    Show-ConsoleSection '1 / PERFIL Y OPERACION'
+    foreach ($candidate in @('Corporate','Academy','Legacy')) { Write-ConsoleMessage (Get-ProfileDescription $candidate) }
+    $selection=Read-ConsoleChoice "Perfil: 1 Corporativo, 2 Academia, 3 Legado [Enter: $Profile]" @('1','2','3')
+    switch ($selection) { '1' {$Profile='Corporate'} '2' {$Profile='Academy'} '3' {$Profile='Legacy'} }
+    Write-ConsoleMessage (Get-ProfileDescription $Profile) 'Title'
     $Mode='Audit'
-    if ((Read-Host 'Type APPLY to configure; Enter only audits') -ceq 'APPLY') {
+    if ((Read-ConsoleChoice 'Operacion: 1 Auditar, 2 Preparar cambios [1]' @('1','2') '1') -eq '2') {
         $Mode='Apply'
-        $DisableLegacyProtocols=((Read-Host 'Disable old TLS/SSL after compatibility checks? y/N') -eq 'y')
-        $DisableOptionalServices=((Read-Host 'Disable Xbox/maps services? y/N') -eq 'y')
-        $UserExperience=((Read-Host "Reduce animations for executing account $($inventory.User)? y/N") -eq 'y')
-        $CreateRestorePoint=((Read-Host 'Request a pre-change restore point? y/N') -eq 'y')
-        $inventory.Startup | Format-Table Name,Location,User -AutoSize | Out-Host
-        $startupSelection=Read-Host 'Exact Run startup names to disable, separated by ; (Enter keeps all)'
+        Show-ConsoleSection '2 / OPCIONES (ENTER CONSERVA EL VALOR ACTUAL)'
+        Write-ConsoleMessage 'Solo responde S tras revisar la compatibilidad. Tambien se acepta Y.'
+        foreach ($option in @(
+            @{Name='DisableLegacyProtocols';Text='Retirar SSL/TLS antiguos (puede afectar software legado)'},
+            @{Name='DisableOptionalServices';Text='Deshabilitar servicios Xbox/mapas'},
+            @{Name='UserExperience';Text="Reducir animaciones de $($inventory.User)"},
+            @{Name='CreateRestorePoint';Text='Solicitar punto de restauracion previo'})) {
+            $default='n'; if ([bool](Get-Variable -Name $option.Name -ValueOnly)) {$default='s'}
+            $answer=Read-ConsoleChoice ($option.Text+" [s/n; $default]") @('s','n','y') $default
+            Set-Variable -Name $option.Name -Value ($answer -in @('s','y'))
+        }
+        Show-ConsoleSection '3 / ARRANQUE Y CUENTAS'
+        Write-ConsoleMessage 'Se conservan todas las entradas salvo seleccion explicita. No selecciones AV, VPN o backup.'
+        foreach ($startup in $inventory.Startup) {
+            Write-ConsoleMessage ("- {0} | {1} | {2}" -f $startup.Name,$startup.User,$startup.Location)
+        }
+        if (-not @($inventory.Startup).Count) { Write-ConsoleMessage 'No se han encontrado entradas en este inventario.' }
+        $startupSelection=Read-Host 'Nombres Run exactos separados por ; [Enter conserva seleccion previa]'
         if ($startupSelection) { $DisableStartupName=@($startupSelection.Split(';') | ForEach-Object { $_.Trim() }) }
-        $StandardUserName=Read-Host 'New standard local account name (Enter to skip)'
-        if ($StandardUserName -and $StandardUserName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,19}$') { throw 'Invalid local account name.' }
+        $userSelection=Read-Host "Cuenta estandar nueva [Enter conserva: $StandardUserName]"
+        if ($userSelection) { $StandardUserName=$userSelection.Trim() }
+        if ($StandardUserName -and $StandardUserName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,19}$') { throw 'Nombre de usuario no valido.' }
     }
 }
+
 if ($Mode -eq 'Apply' -and [version]$inventory.Version -lt [version]'6.3' -and $Profile -ne 'Legacy') { throw 'Windows 7/8 requires -Profile Legacy. Protocol removal remains explicit.' }
 if ($Mode -eq 'Apply' -and $inventory.Managed -and -not $AllowManaged) { throw 'Managed/domain device: audit and review GPO/MDM first; use -AllowManaged only with approved local exceptions.' }
 if ($StandardUserName -and (Get-WmiObject Win32_UserAccount -Filter "LocalAccount=True AND Name='$StandardUserName'")) {
@@ -418,26 +585,31 @@ foreach ($name in $DisableStartupName) {
     }
     if (-not $matched) { throw "Startup value not found: $name. Audit first; no changes made." }
 }
-$plan | Select-Object Path,Name,Reason | Format-Table -AutoSize | Out-Host
-Write-Host "Profile=$Profile; managed=$($inventory.Managed); power=Balanced; standard user=$StandardUserName"
-if ($Mode -eq 'Apply' -and -not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Apply displayed workstation plan (reboot required)')) { return }
-if ($WhatIfPreference) { return }
+$observed=@(foreach ($item in $plan) {
+    $current=Get-RegState $item.Path $item.Name
+    $desired=[pscustomobject]@{Exists=($item.Kind -ne 'Delete');Kind=$item.Kind;Value=$item.Value}
+    [pscustomobject]@{Category=(Get-SettingCategory $item);Path=$item.Path;Name=$item.Name;Current=$current;Desired=$desired;Matches=(Test-SameState $current $desired)}
+})
+Show-WorkstationHeader $inventory $Profile
+Show-WorkstationPlan $observed ($inventory.PowerScheme -ne '381b4222-f694-41f0-9685-ff5bb260df2e')
+if ($Mode -eq 'Apply' -and -not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Aplicar el plan mostrado; requiere validacion tras reinicio')) {
+    if ($WhatIfPreference) { Write-ConsoleMessage '[SIMULACION] Sin cambios ni informes escritos.' }
+    else { Write-ConsoleMessage '[CANCELADO] No se ha aplicado el plan.' }
+    return
+}
+if ($WhatIfPreference) { Write-ConsoleMessage '[SIMULACION] Sin cambios ni informes escritos.'; return }
+Write-ConsoleMessage '[1/4] Guardando inventario y diagnostico...'
 $run=New-ProtectedRunDirectory $StateRoot
 $inventory | Export-Clixml -LiteralPath (Join-Path $run 'inventory.clixml') -Depth 6
 $plan | Export-Csv -LiteralPath (Join-Path $run 'plan.csv') -NoTypeInformation -Encoding UTF8
-$observed=@(foreach ($item in $plan) {
-    $current=Get-RegState $item.Path $item.Name
-    $desired=[pscustomobject]@{Exists=($item.Kind -ne 'Delete'); Kind=$item.Kind; Value=$item.Value}
-    [pscustomobject]@{Path=$item.Path;Name=$item.Name;Current=$current;Desired=$desired;Matches=(Test-SameState $current $desired)}
-})
 $observed | Export-Clixml -LiteralPath (Join-Path $run 'settings-audit.clixml') -Depth 6
 Get-WorkstationDiagnostics | Set-Content -LiteralPath (Join-Path $run 'diagnostics.txt') -Encoding UTF8
 Write-ManualChecklist $inventory (Join-Path $run 'manual-checklist.txt')
-Write-Output "Evidence: $run"
-if ($Mode -eq 'Audit') { return }
+if ($Mode -eq 'Audit') { Show-RunResult $run 'AUDITORIA'; $global:LASTEXITCODE=0; return }
 $script:JournalPath=Join-Path $run 'state.clixml'
 $script:Journal=[pscustomobject]@{Schema=1;MachineId=$machineId;UserSid=$userSid;Profile=$Profile;Created=(Get-Date).ToString('o');Entries=@()}
 Save-Journal
+Write-ConsoleMessage '[2/4] Preparando recuperacion y diario de cambios...'
 if ($CreateRestorePoint) {
     # Fail rather than claim that a restore point was created. No quota changes.
     $before=@(Get-ComputerRestorePoint)
@@ -457,6 +629,7 @@ if ($CreateRestorePoint) {
     $latest | Export-Clixml -LiteralPath (Join-Path $run 'restore-point.clixml')
 }
 try {
+    Write-ConsoleMessage '[3/4] Aplicando ajustes del registro y energia...'
     Invoke-RegistryPlan $plan
     $balanced='381b4222-f694-41f0-9685-ff5bb260df2e'
     $current=Get-PowerScheme
@@ -467,6 +640,7 @@ try {
         if ($LASTEXITCODE -ne 0 -or (Get-PowerScheme) -ne $balanced) { throw 'Balanced plan unavailable or blocked. Review OEM power policy.' }
         $entry.Status='Applied'; Save-Journal
     }
+    Write-ConsoleMessage '[4/4] Comprobando cuenta opcional y cerrando resultados...'
     if ($StandardUserName) {
         if (Get-WmiObject Win32_UserAccount -Filter "LocalAccount=True AND Name='$StandardUserName'") { throw 'Account exists; no passwords or memberships will be replaced.' }
         $password=Read-Host "Password for new standard user $StandardUserName" -AsSecureString
@@ -494,8 +668,10 @@ try {
             $plain=$null; $password.Dispose(); $confirmation.Dispose()
         }
     }
-    Write-Output "Applied. Journal: $JournalPath. Reboot manually, audit again and validate applications."
+    Show-RunResult $run 'APLICADO' @($Journal.Entries | Where-Object {$_.Status -eq 'Applied'}).Count
+    $global:LASTEXITCODE=0
 } catch {
+    Write-ConsoleMessage '[ERROR] Ejecucion incompleta. No se presenta como finalizada.' 'Warn'
     Write-Warning "Partial application; recorded changes can be restored using -Mode Restore -SnapshotPath '$JournalPath'."
     throw
 }

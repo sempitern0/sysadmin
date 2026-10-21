@@ -7,7 +7,9 @@ commit. No runtime helpers, downloads, installation or execution-policy bypass.
 Use native **Windows PowerShell 5.1**, elevated except for Preflight. Windows 7
 requires SP1 and preinstalled WMF 5.1; Windows 8 RTM is not supported by that runtime.
 Windows 8.1/10/11 client editions are capability-gated; server editions are rejected.
-PowerShell 7 can run safe Preflight only. Use native 64-bit PowerShell on 64-bit OS.
+PowerShell 7 and 32-bit processes on 64-bit Windows automatically relaunch the
+same file in native Windows PowerShell, preserving parameters and exit status.
+No execution-policy bypass, installation or automatic elevation is performed.
 
 ```powershell
 .\windows-workstation-assistant.ps1 -Mode Preflight
@@ -78,3 +80,14 @@ Before rollout test audit → WhatIf → apply → reboot → applications/netwo
 restore → reboot on disposable target-version systems, including a real legacy
 application and a laptop. See the Spanish guide for the full compatibility matrix,
 limits, deployment commands and Microsoft references.
+
+## Console flow
+
+Profile summaries lead into grouped pending/already-matching registry counts,
+explicit optional actions and a four-stage apply flow. Audit and apply results
+remain distinct; registry matches are not compliance scores. `-Detailed` exposes
+technical paths/names without exposing startup values. `-NoColor` / `NO_COLOR`
+and redirected output use plain text; lines wrap to the available console width.
+Menus retry invalid input and retain supplied options when Enter is pressed.
+The native-engine handoff preserves WhatIf, explicit Confirm false, arrays and
+literal quoted paths; Windows target/interactive acceptance remains a lab gate.

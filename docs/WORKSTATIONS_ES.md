@@ -16,7 +16,7 @@ siendo responsables de unión al dominio, DNS y políticas de dominio.
 | Windows 8.1 | Windows PowerShell 5.1; perfil Legacy predeterminado |
 | Windows 10 / 11 | Windows PowerShell 5.1 integrado; Home, Pro, Enterprise/Education según capacidades |
 | Windows Server / controladores de dominio | Rechazados; usar los asistentes de servidor |
-| PowerShell 7 / proceso de 32 bits en Windows de 64 bits | Preflight disponible; operaciones rechazadas |
+| PowerShell 7 / proceso de 32 bits en Windows de 64 bits | Detecta el entorno y relanza automaticamente el mismo archivo en Windows PowerShell nativo, conservando parametros y resultado |
 
 La compatibilidad del script **no restablece el soporte del fabricante**. Windows
 7/8.1 están fuera de soporte; Windows 10 terminó su soporte general el 14-10-2025
@@ -44,7 +44,7 @@ Compara el hash con un artefacto/revisión verificado, revisa el archivo y utili
 la política de ejecución/firma aprobada por tu organización. No se usa `iex`,
 no se cambia la política de ejecución y no se instala WMF automáticamente.
 
-En **Windows PowerShell elevado**:
+En **PowerShell elevado** (5.1 o 7; el script adapta el motor automaticamente):
 
 ```powershell
 # Sin argumentos: asistente de perfil y opciones; Enter audita.
@@ -173,3 +173,31 @@ el endurecimiento al runner.
 - [Diagnóstico por edición](https://learn.microsoft.com/en-us/windows/privacy/configure-windows-diagnostic-data-in-your-organization)
 - [Checkpoint-Computer](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/checkpoint-computer?view=powershell-5.1)
 - [Fast Startup y actualizaciones](https://learn.microsoft.com/en-us/troubleshoot/windows-client/setup-upgrade-and-drivers/updates-not-install-with-fast-startup)
+
+## Consola y deteccion automatica del motor
+
+Windows 11 Pro es compatible aunque abras el script desde PowerShell 7. El
+asistente detecta Core/arquitectura y continua en Windows PowerShell 5.1 usando
+System32 o Sysnative. El SO se identifica despues con las API nativas. Conserva
+arrays, switches, `-WhatIf`, `-Confirm:$false` y el codigo de salida del proceso.
+No cambia la politica de ejecucion, no eleva privilegios automaticamente ni
+instala motores; si falta Windows PowerShell muestra la ruta que falta. Hay que
+usar el archivo `.ps1` guardado, no pegar su contenido en `iex`.
+
+La consola agrupa la informacion por perfil: identidad del equipo, objetivo,
+opciones, plan con valores pendientes/coincidentes y resultado. Los contadores
+son comparaciones de registro, no una puntuacion de cumplimiento. La aplicacion
+muestra cuatro fases; las rutas de informes y las tareas posteriores aparecen al
+final. Un fallo no se presenta como una ejecucion completa.
+
+- `-Detailed`: muestra rutas y nombres tecnicos sin imprimir valores ni comandos
+  de arranque potencialmente sensibles.
+- `-NoColor` o variable `NO_COLOR`: salida sin colores. La redireccion desactiva
+  colores automaticamente; se usan etiquetas de texto y ancho adaptable.
+- El menu acepta `s/n` y `y`, repregunta ante entradas invalidas y Enter conserva
+  opciones previamente pasadas por parametros.
+
+```powershell
+.\windows-workstation-assistant.ps1 -Mode Audit -Profile Academy -NoColor
+.\windows-workstation-assistant.ps1 -Mode Apply -Profile Corporate -Detailed -WhatIf
+```
