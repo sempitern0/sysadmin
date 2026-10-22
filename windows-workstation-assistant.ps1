@@ -342,25 +342,112 @@ function Get-PowerScheme {
     if (-not $match.Success) { throw 'Cannot identify active power scheme GUID.' }
     return $match.Value.ToLowerInvariant()
 }
+function Assert-RecoveryJournal {
+    <# Validate the whole journal before the first write, including entry order. #>
+    param($Record)
+    if ($Record.Schema -ne 1 -or -not $Record.MachineId -or -not $Record.UserSid) {
+        throw 'Diario incompatible o sin identidad de equipo/usuario.'
+    }
+    [void][datetimeoffset]::Parse($Record.Created)
+    $indices = @{}
+    foreach ($entry in $Record.Entries) {
+        if ($entry.Index -isnot [int] -or $entry.Index -lt 0 -or $indices.ContainsKey($entry.Index)) {
+            throw 'Indice de recuperacion invalido o duplicado.'
+        }
+        $indices[$entry.Index] = $true
+        if ($entry.Status -notin @('Pending', 'Applied', 'Restored', 'ManualReview')) {
+            throw 'Estado de recuperacion desconocido.'
+        }
+        switch ($entry.Type) {
+            'Registry' {
+                if ($entry.Path -notmatch '^HK(LM|CU):\\' -or -not $entry.Name) {
+                    throw 'Ruta o nombre de registro invalido.'
+                }
+                foreach ($state in @($entry.Before, $entry.After)) {
+                    if ($state.Exists -isnot [bool]) { throw 'Estado de registro incompleto.' }
+                    if ($state.Exists -and $state.Kind -notin @('String', 'ExpandString', 'Binary', 'DWord', 'MultiString', 'QWord', 'None')) {
+                        throw 'Tipo de registro desconocido.'
+                    }
+                    if ($state.Exists -and $null -eq $state.PSObject.Properties['Value']) { throw 'Falta el valor del registro.' }
+                }
+            }
+            'Power' {
+                foreach ($scheme in @($entry.Before, $entry.After)) {
+                    $parsed = [guid]::Empty
+                    if (-not [guid]::TryParse([string]$scheme, [ref]$parsed)) { throw 'Plan de energia invalido.' }
+                }
+            }
+            'User' { if (-not $entry.Name) { throw 'Cuenta sin nombre.' } }
+            default { throw 'Tipo de entrada de recuperacion desconocido.' }
+        }
+    }
+}
+function Invoke-JournalRecovery {
+    <# Keep mutation, persistence and reporting separate. A save failure aborts immediately. #>
+    [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
+    param($Record)
+    Assert-RecoveryJournal $Record
+    $summary = [pscustomobject]@{Restored=0; Conflicts=0; Manual=0; Skipped=0}
+    if (-not $PSCmdlet.ShouldProcess('Ajustes registrados', 'Recuperar valores anteriores')) { return $summary }
+    foreach ($entry in @($Record.Entries | Sort-Object Index -Descending)) {
+        if ($entry.Status -eq 'Restored') {
+            $summary.Skipped++
+            continue
+        }
+        try {
+            $result = Restore-RecordedEntry $entry
+        } catch {
+            $summary.Conflicts++
+            Write-Warning ("Entrada {0}: {1}" -f $entry.Index, $_.Exception.Message)
+            continue
+        }
+        switch ($result) {
+            'Conflict' {
+                $summary.Conflicts++
+                Write-Warning ("Entrada {0}: cambio posterior conservado." -f $entry.Index)
+            }
+            'ManualReview' { $summary.Manual++ }
+            'Restored' { $summary.Restored++ }
+            default { throw 'Resultado de recuperacion inesperado.' }
+        }
+        if ($result -eq 'Conflict') { continue }
+        $previousStatus = $entry.Status
+        $entry.Status = $result
+        try { Save-Journal } catch {
+            $entry.Status = $previousStatus
+            throw 'No se pudo guardar el diario. Recuperacion detenida; conserva el diario y revisa el almacenamiento antes de reintentar.'
+        }
+    }
+    return $summary
+}
 function Get-RecoveryHistory {
     param([string]$Root,[string]$MachineId,[string]$UserSid)
     if (-not (Test-Path -LiteralPath $Root)) { return }
     if ((Get-Item -LiteralPath $Root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'No se admite un directorio de recuperacion redirigido.' }
-    foreach ($directory in @(Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name -Descending)) {
+    $records = foreach ($directory in @(Get-ChildItem -LiteralPath $Root -Directory)) {
         if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
         $path=Join-Path $directory.FullName 'state.clixml'
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
         try {
             $record=Import-Clixml -LiteralPath $path
-            if ($record.Schema -ne 1 -or $record.MachineId -ne $MachineId) { continue }
+            Assert-RecoveryJournal $record
+            if ($record.MachineId -ne $MachineId) { continue }
             $pending=@($record.Entries | Where-Object {$_.Status -ne 'Restored' -and $_.Type -ne 'User'}).Count
             $manual=@($record.Entries | Where-Object {$_.Type -eq 'User'}).Count
-            [pscustomobject]@{Path=$path;Created=$record.Created;Profile=$record.Profile;
-                Pending=$pending;Manual=$manual;Compatible=($record.UserSid -eq $UserSid);
-                UserSid=$record.UserSid;HasPoint=(Test-Path -LiteralPath (Join-Path $directory.FullName 'restore-point.clixml'))}
+            [pscustomobject]@{
+                Path = $path
+                Created = $record.Created
+                Profile = $record.Profile
+                Pending = $pending
+                Manual = $manual
+                Compatible = ($record.UserSid -eq $UserSid)
+                UserSid = $record.UserSid
+                Timestamp = [datetimeoffset]::Parse($record.Created)
+            }
         } catch { Write-Warning ("Diario omitido (no valido): {0}" -f $path) }
     }
+    $records | Sort-Object Timestamp -Descending
 }
 function Select-RecoverySnapshot {
     param([object[]]$History)
@@ -646,26 +733,16 @@ if ($Mode -eq 'Interactive' -or ($Mode -eq 'Restore' -and -not $SnapshotPath)) {
 if ($Mode -eq 'Restore') {
     if (-not $SnapshotPath) { throw 'No hay diario seleccionado.' }
     $script:Journal=Import-Clixml -LiteralPath $SnapshotPath
-    if ($Journal.Schema -ne 1 -or $Journal.MachineId -ne $machineId -or $Journal.UserSid -ne $userSid) { throw 'Snapshot version, machine or operator mismatch.' }
+    Assert-RecoveryJournal $Journal
+    if ($Journal.MachineId -ne $machineId -or $Journal.UserSid -ne $userSid) { throw 'Snapshot version, machine or operator mismatch.' }
     Show-ConsoleSection 'RECUPERACION / AJUSTES REGISTRADOS'
     Write-ConsoleMessage "Diario: $SnapshotPath | Entradas: $(@($Journal.Entries).Count)"
     Write-ConsoleMessage '[MANUAL] Las cuentas creadas se conservan. Los cambios posteriores se respetan.' 'Warn'
     if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME,'Restaurar ajustes registrados; conservar cambios posteriores en conflicto')) { return }
     $script:JournalPath=[IO.Path]::GetFullPath($SnapshotPath)
-    $conflicts=0; $restored=0; $manual=0
-    foreach ($entry in @($Journal.Entries | Sort-Object Index -Descending)) {
-        try {
-            $result=Restore-RecordedEntry $entry
-            if ($result -eq 'Conflict') { $conflicts++; Write-Warning "Concurrent change preserved (entry $($entry.Index))."; continue }
-            if ($result -eq 'ManualReview') {
-                 $manual++; Write-Warning "Account $($entry.Name) retained; review manually after preserving its data."
-            }
-            if ($result -eq 'Restored') { $restored++ }
-            $entry.Status=$result; Save-Journal
-        } catch { $conflicts++; Write-Warning $_.Exception.Message }
-    }
-    Write-ConsoleMessage ("Recuperados: {0} | Conflictos/errores: {1} | Cuentas conservadas: {2}" -f $restored,$conflicts,$manual)
-    if ($conflicts) { throw "$conflicts restore errors/conflicts. Review journal and retry only after resolving them." }
+    $result = Invoke-JournalRecovery -Record $Journal -Confirm:$false
+    Write-ConsoleMessage ("Recuperados: {0} | Conflictos/errores: {1} | Cuentas conservadas: {2} | Ya recuperados: {3}" -f $result.Restored,$result.Conflicts,$result.Manual,$result.Skipped)
+    if ($result.Conflicts) { throw "$($result.Conflicts) conflictos o errores. Revisa el diario antes de reintentar." }
     Write-ConsoleMessage '[OK] Recuperacion de ajustes terminada. Reinicia y valida. Las cuentas se conservan.' 'OK'
     $global:LASTEXITCODE=0
     return
