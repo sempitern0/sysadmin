@@ -5,7 +5,7 @@ $root=Split-Path -Parent $PSScriptRoot
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'windows-workstation-assistant.ps1'),[ref]$tokens,[ref]$errors)
 if ($errors) { throw ($errors | Out-String) }
-foreach ($name in @('Get-OptionalProperty','Test-EnrollmentRecord','Get-WindowsLicenseSummary')) {
+foreach ($name in @('Get-OptionalProperty','Test-EnrollmentRecord','Get-ManagementEvidence','Assert-ManagedApplyPolicy','Get-WindowsLicenseSummary')) {
     $node=$ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     . ([scriptblock]::Create($node.Extent.Text))
 }
@@ -15,8 +15,26 @@ foreach ($record in @($null,[pscustomobject]@{},[pscustomobject]@{PSPath='empty'
     Assert-Inventory (-not (Test-EnrollmentRecord $record)) 'Empty/unrelated enrollment must not fail or imply MDM'
 }
 foreach ($value in @(0,1,6)) {
-    Assert-Inventory (Test-EnrollmentRecord ([pscustomobject]@{EnrollmentType=$value})) 'Enrollment presence detected including zero'
+    Assert-Inventory (-not (Test-EnrollmentRecord ([pscustomobject]@{EnrollmentType=$value}))) 'EnrollmentType alone must not mark a local PC managed'
 }
+foreach ($provider in @('', '  ')) {
+    Assert-Inventory (-not (Test-EnrollmentRecord ([pscustomobject]@{EnrollmentType=6;ProviderID=$provider}))) 'Blank MDM provider is not evidence'
+}
+$mdm=[pscustomobject]@{EnrollmentType=6;ProviderID='MS DM Server'}
+Assert-Inventory (Test-EnrollmentRecord $mdm) 'MDM provider is a conservative management indication'
+Assert-Inventory (@(Get-ManagementEvidence $false @()).Count -eq 0) 'Unmanaged standalone PC'
+Assert-Inventory (@(Get-ManagementEvidence $false @([pscustomobject]@{EnrollmentType=0})).Count -eq 0) 'Placeholder MDM record ignored'
+Assert-Inventory (@(Get-ManagementEvidence $true @()).Count -eq 1) 'Domain membership blocks Apply'
+Assert-Inventory (@(Get-ManagementEvidence $false @($mdm)).Count -eq 1) 'MDM provider blocks Apply'
+Assert-Inventory (@(Get-ManagementEvidence $true @($mdm)).Count -eq 2) 'Both management sources preserved'
+$localInventory=[pscustomobject]@{Managed=$false;ManagedEvidence=@()}
+Assert-ManagedApplyPolicy $localInventory $false
+$managedInventory=[pscustomobject]@{Managed=$true;ManagedEvidence=@('Proveedor MDM registrado')}
+$blocked=$false
+try { Assert-ManagedApplyPolicy $managedInventory $false } catch { $blocked=($_.Exception.Message -match 'gestion') }
+Assert-Inventory $blocked 'Managed Apply must fail without an explicit exception'
+Assert-ManagedApplyPolicy $managedInventory $true
+Assert-Inventory $true 'Explicit managed exception remains available'
 foreach ($record in @($null,[pscustomobject]@{},[pscustomobject]@{Name=$null},[pscustomobject]@{Name=''})) {
     Assert-Inventory ((Get-OptionalProperty $record 'Name') -eq 'No disponible') 'Missing optional values explicit'
 }
