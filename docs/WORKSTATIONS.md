@@ -11,6 +11,23 @@ PowerShell 7 and 32-bit processes on 64-bit Windows automatically relaunch the
 same file in native Windows PowerShell, preserving parameters and exit status.
 No execution-policy bypass, installation or automatic elevation is performed.
 
+On Windows 11 Home with a default `Restricted` execution policy, run a reviewed
+copy from an elevated terminal with a process-only exception:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\windows-workstation-assistant.ps1" -Mode Audit -Profile Academy
+```
+
+A local, optional CMD launcher could call
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows-workstation-assistant.ps1" %*`.
+It is deliberately **not committed**: the documented command avoids a new script.
+This does not elevate the user or override enforced MachinePolicy/UserPolicy.
+
+EnrollmentType alone is not MDM evidence; Windows may keep placeholder registry
+records. A joined domain or a nonempty enrolled ProviderID triggers guarded
+Apply, before asking interactive questions. An MDM provider record may be stale,
+so verify enrollment before using the approved `-AllowManaged` exception.
+
 ```powershell
 .\windows-workstation-assistant.ps1 -Mode Preflight
 .\windows-workstation-assistant.ps1 -Mode Audit -Profile Academy
