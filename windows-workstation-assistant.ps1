@@ -40,8 +40,26 @@ function Get-OptionalProperty {
 }
 function Test-EnrollmentRecord {
     param($Record)
-    # Empty registry keys can yield no object. Never enumerate .Properties.Name.
-    return ($null -ne $Record -and $null -ne $Record.PSObject.Properties['EnrollmentType'])
+    # EnrollmentType alone also exists in placeholder entries on unmanaged PCs.
+    # ProviderID is an MDM indication, not proof of an active connection:
+    # stale provider entries still require manual review before Apply.
+    $provider=[string](Get-OptionalProperty $Record 'ProviderID' '')
+    return (-not [string]::IsNullOrWhiteSpace($provider))
+}
+function Get-ManagementEvidence {
+    param([bool]$DomainJoined,[object[]]$EnrollmentRecords=@())
+    $evidence=@()
+    if ($DomainJoined) { $evidence+='Dominio Active Directory' }
+    if (@($EnrollmentRecords | Where-Object { Test-EnrollmentRecord $_ }).Count -gt 0) {
+        $evidence+='Proveedor MDM registrado'
+    }
+    return $evidence
+}
+function Assert-ManagedApplyPolicy {
+    param($Inventory,[bool]$AllowOverride)
+    if (-not $Inventory.Managed -or $AllowOverride) { return }
+    $sources=@(Get-OptionalProperty $Inventory 'ManagedEvidence' 'dominio o MDM') -join ', '
+    throw ("Equipo con indicios de gestion ({0}). Revisa dominio, GPO/MDM y las inscripciones residuales antes de aplicar cambios. Usa -AllowManaged solo con una excepcion local aprobada." -f $sources)
 }
 function Get-WindowsLicenseSummary {
     try {
@@ -190,7 +208,10 @@ function Show-WorkstationHeader {
     Write-ConsoleMessage ("Licencia Windows: {0}" -f (Get-OptionalProperty $Inventory 'License'))
     Write-ConsoleMessage ("Motor: PowerShell {0} / {1} | Proceso: {2} bits" -f $PSVersionTable.PSVersion,$PSVersionTable.PSEdition,([IntPtr]::Size*8))
     Write-ConsoleMessage ("Usuario de ejecucion: {0}" -f $Inventory.User)
-    if ($Inventory.Managed) { Write-ConsoleMessage '[REVISION] Equipo gestionado: las politicas centrales tienen prioridad.' 'Warn' }
+    if ($Inventory.Managed) {
+        $sources=@(Get-OptionalProperty $Inventory 'ManagedEvidence' 'dominio o MDM') -join ', '
+        Write-ConsoleMessage ("[REVISION] Indicios de gestion: {0}. Verifica las politicas centrales." -f $sources) 'Warn'
+    }
     Write-ConsoleMessage 'La auditoria observa valores; no certifica cumplimiento ni efectividad tras reinicio.'
 }
 function Show-WorkstationPlan {
@@ -518,14 +539,13 @@ function Get-WorkstationInventory {
     $chassis=Get-WmiObject Win32_SystemEnclosure
     $bios=Get-WmiObject Win32_BIOS
     $edition=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID
-    $managed=[bool]$computer.PartOfDomain
+    $enrollmentRecords=@()
     if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Enrollments') {
-        $enrollments=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments' | Where-Object {
-            $data=Get-ItemProperty $_.PSPath
-            Test-EnrollmentRecord $data
-        })
-        if ($enrollments.Count) { $managed=$true }
+        $enrollmentRecords=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments' |
+            ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath })
     }
+    $managementEvidence=@(Get-ManagementEvidence ([bool]$computer.PartOfDomain) $enrollmentRecords)
+    $managed=($managementEvidence.Count -gt 0)
     $secureBoot='Not available (legacy BIOS, permissions or unsupported cmdlet)'
     if (Get-Command Confirm-SecureBootUEFI -ErrorAction SilentlyContinue) {
         try { $secureBoot=[string](Confirm-SecureBootUEFI) } catch { $secureBoot=$_.Exception.Message }
@@ -540,7 +560,7 @@ function Get-WorkstationInventory {
         License=Get-WindowsLicenseSummary
         Edition=$edition; Manufacturer=$computer.Manufacturer; Model=$computer.Model
         Device=Get-DeviceKind @($chassis.ChassisTypes) ([int]$computer.PCSystemType)
-        BIOS=$bios.SMBIOSBIOSVersion; Managed=$managed; Domain=$computer.Domain
+        BIOS=$bios.SMBIOSBIOSVersion; Managed=$managed; ManagedEvidence=$managementEvidence; Domain=$computer.Domain
         User=[Security.Principal.WindowsIdentity]::GetCurrent().Name
         SecureBoot=$secureBoot; TPM=$tpm; PowerScheme=Get-PowerScheme
         Administrators=@(Get-LocalGroupMembers 'S-1-5-32-544')
@@ -761,6 +781,8 @@ if ($Mode -eq 'Interactive') {
     Show-OperationChoices
     $Mode='Audit'
     if ((Read-ConsoleChoice 'Operacion: 1 Auditar, 2 Preparar cambios [1]' @('1','2') '1') -eq '2') {
+        # Reject before requesting four options and account/startup selections.
+        Assert-ManagedApplyPolicy $inventory ([bool]$AllowManaged)
         $Mode='Apply'
         Show-ConsoleSection '2 / OPCIONES (ENTER CONSERVA EL VALOR ACTUAL)'
         Write-ConsoleMessage 'Solo responde S tras revisar la compatibilidad. Tambien se acepta Y.'
@@ -791,7 +813,7 @@ if ($Mode -eq 'Interactive') {
 }
 
 if ($Mode -eq 'Apply' -and [version]$inventory.Version -lt [version]'6.3' -and $Profile -ne 'Legacy') { throw 'Windows 7/8 requires -Profile Legacy. Protocol removal remains explicit.' }
-if ($Mode -eq 'Apply' -and $inventory.Managed -and -not $AllowManaged) { throw 'Managed/domain device: audit and review GPO/MDM first; use -AllowManaged only with approved local exceptions.' }
+if ($Mode -eq 'Apply') { Assert-ManagedApplyPolicy $inventory ([bool]$AllowManaged) }
 if ($StandardUserName -and (Get-WmiObject Win32_UserAccount -Filter "LocalAccount=True AND Name='$StandardUserName'")) {
     throw 'Requested account already exists. No passwords or memberships will be replaced.'
 }
