@@ -31,6 +31,21 @@ Elige un commit revisado y sustituye `COMMIT` por su SHA completo. En Windows
 antiguo sin TLS compatible descarga desde otro equipo y transfiere el archivo;
 no desactives la validación de certificados para descargarlo.
 
+En Windows 11 Home, una politica `Restricted` puede impedir abrir archivos
+`.ps1` incluso desde una consola elevada. Tras verificar el contenido y su
+procedencia, lanza una unica ejecucion sin cambiar permanentemente la politica:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\windows-workstation-assistant.ps1" -Mode Audit -Profile Academy
+```
+
+Es el equivalente a usar un lanzador local `.cmd` con
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows-workstation-assistant.ps1" %*`.
+El archivo CMD es **opcional y no se incluye** en el repositorio: basta con el
+comando anterior. Bypass afecta solo a la ejecucion elegida, no confiere elevacion
+y no supera una politica MachinePolicy/UserPolicy. Abrir consola como administrador
+para `Apply`; si hay una politica corporativa, respetarla.
+
 ```powershell
 # Desde un equipo con HTTPS/TLS compatible:
 $url = 'https://raw.githubusercontent.com/sempitern0/sysadmin/COMMIT/windows-workstation-assistant.ps1'
@@ -107,8 +122,11 @@ Para clases: cuentas individuales; grupos por curso con ACL sobre sus carpetas;
 profesores separados de administradores. El script no inventa carpetas compartidas,
 permisos sobre datos existentes ni credenciales comunes para todo un aula.
 
-En dominio o con indicios de inscripción MDM, Apply se bloquea salvo
-`-AllowManaged`. Es una excepción explícita: **no detecta todos los gestores**
+En dominio o con indicios de inscripción MDM (identificador no vacio del proveedor), Apply se bloquea salvo
+`-AllowManaged`. Una entrada de registro con solo `EnrollmentType` no demuestra
+inscripcion activa, y ya no basta para clasificar un Windows Home local como gestionado.
+El bloqueo se comprueba antes de pedir las opciones interactivas. Un proveedor
+registrado puede ser residual: revisar la conexion real antes de aprobar excepciones. Es una excepción explícita: **no detecta todos los gestores**
 ni vence una GPO/Intune. Revisar `gpresult /r`, `dsregcmd /status` cuando exista,
 LAPS, EDR, VPN y política corporativa. No usar estas excepciones para combatir
 políticas centrales; publicar los ajustes apropiados desde el gestor.
