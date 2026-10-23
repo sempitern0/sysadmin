@@ -252,3 +252,15 @@ En el bloque de arranque, la lista compacta muestra nombre y usuario; utiliza
 comandos de arranque. `-NoColor`, `NO_COLOR` y la redireccion conservan
 una salida legible solo con texto ASCII, sin depender de secuencias ANSI.
 Los perfiles, validaciones, confirmaciones y acciones de escritura no cambian.
+
+### Preflight: identificacion del sistema
+
+`-Mode Preflight` identifica el Windows real mediante version NT, compilacion y
+`EditionID`: distingue Windows 10 y Windows 11 (ambos usan NT 10.0), y muestra
+Home, Pro, Education y otras ediciones conocidas, nombre del equipo, fabricante,
+modelo, tipo de chasis, arquitectura del sistema y version `DisplayVersion` cuando
+esta disponible. No deduce la edicion a partir de la version de PowerShell.
+Utiliza WMI y registro en modo lectura y no requiere elevacion. Si falta un dato,
+se muestra como no disponible; una identificacion fallida produce error en lugar
+de declarar compatibilidad. El texto `No changes made.` se mantiene para los
+consumidores de Preflight. Para aplicar ajustes sigue siendo necesaria elevacion.
