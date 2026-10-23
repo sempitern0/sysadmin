@@ -124,3 +124,13 @@ Output wraps across narrow classic PowerShell consoles without ANSI dependence;
 `-NoColor`, `NO_COLOR` and redirected output remain supported. Startup rows
 show name and user by default; `-Detailed` also shows inventory locations,
 without printing startup command values. Mutating behavior is unchanged.
+
+### Actual Windows identity in Preflight
+
+`-Mode Preflight` now reports the installed Windows family, edition, OS build,
+optional DisplayVersion, OS architecture, model, manufacturer and laptop/desktop
+classification from read-only WMI and registry calls. Windows 11 is identified
+using the OS build (22000+), not NT 10.0 alone or the PowerShell engine version.
+Preflight is non-elevated, does not modify the system, and preserves the
+`No changes made.` marker consumed by checks and operators. Unsupported clients
+and failed identification do not report success.
