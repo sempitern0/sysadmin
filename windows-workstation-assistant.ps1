@@ -95,13 +95,16 @@ function New-CompatibleLaunchCommand {
     return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 }
 function Get-ConsoleWidth {
-    try { return [math]::Max(24,[math]::Min(100,$Host.UI.RawUI.WindowSize.Width-1)) }
-    catch { return 88 }
+    try {
+        $width=[int]$Host.UI.RawUI.WindowSize.Width
+        if ($width -le 0) { return 88 }
+        return [math]::Max(24,[math]::Min(100,$width-1))
+    } catch { return 88 }
 }
 function Format-ConsoleText {
     param([string]$Text, [int]$Width=88)
     $Width=[math]::Max(12,$Width)
-    # Prevent names imported from the machine from injecting terminal control codes.
+    # Escape terminal control sequences from untrusted machine and account names.
     $clean=$Text -replace '[\x00-\x1f\x7f]',' '
     while ($clean.Length -gt $Width) {
         $cut=$clean.LastIndexOf(' ',$Width)
@@ -112,58 +115,74 @@ function Format-ConsoleText {
     if ($clean.Length) { $clean }
 }
 function Write-ConsoleMessage {
-    param([string]$Text, [ValidateSet('Info','Title','OK','Warn')][string]$Tone='Info')
+    param([string]$Text, [ValidateSet('Info','Title','OK','Warn','Muted','Accent','Danger')][string]$Tone='Info')
     $useColor=-not $NoColor -and -not (Test-Path Env:NO_COLOR)
     try { if ([Console]::IsOutputRedirected) { $useColor=$false } } catch { $useColor=$false }
+    $palette=@{Title='Cyan';OK='Green';Warn='Yellow';Muted='DarkGray';Accent='White';Danger='Red'}
     foreach ($line in @(Format-ConsoleText $Text (Get-ConsoleWidth))) {
         if ($useColor -and $Tone -ne 'Info') {
-            $color=@{Title='Cyan';OK='Green';Warn='Yellow'}[$Tone]
-            Write-Host $line -ForegroundColor $color
+            Write-Host $line -ForegroundColor $palette[$Tone]
         } else { Write-Host $line }
     }
 }
 function Show-ConsoleSection {
     param([string]$Title)
     Write-Host ''
-    Write-ConsoleMessage ('=' * (Get-ConsoleWidth)) 'Title'
-    Write-ConsoleMessage ('>> '+$Title) 'Title'
-    Write-ConsoleMessage ('=' * (Get-ConsoleWidth)) 'Title'
+    $heading='-- '+$Title+' '
+    $width=Get-ConsoleWidth
+    if ($heading.Length -lt $width) { $heading+=('-'*($width-$heading.Length)) }
+    Write-ConsoleMessage $heading 'Title'
 }
 function Show-ConsoleCard {
     param([string]$Title,[string[]]$Lines,[string]$Tone='Title')
+    # Keep the recovery and confirmation cards compact; no double separator.
     $width=Get-ConsoleWidth
     $inner=$width-4
     $border='+'+('-'*($width-2))+'+'
-    Write-Host ''
-    Write-ConsoleMessage $border $Tone
+    Write-ConsoleMessage $border 'Muted'
     foreach ($line in @(Format-ConsoleText $Title $inner)) {
         Write-ConsoleMessage ('| '+$line.PadRight($inner)+' |') $Tone
     }
-    Write-ConsoleMessage ('+'+('-'*($width-2))+'+') $Tone
     foreach ($paragraph in $Lines) {
         foreach ($line in @(Format-ConsoleText $paragraph $inner)) {
             Write-ConsoleMessage ('| '+$line.PadRight($inner)+' |')
         }
     }
-    Write-ConsoleMessage $border $Tone
+    Write-ConsoleMessage $border 'Muted'
+}
+function Show-ConsoleChoiceRow {
+    param([string]$Number,[string]$Title,[string]$Description,[bool]$Selected=$false,[string]$Tone='Accent')
+    $marker='  '
+    if ($Selected) { $marker='> '; $Tone='OK' }
+    $suffix=''
+    if ($Selected) { $suffix='  < ACTUAL / ENTER' }
+    Write-ConsoleMessage ("{0}[{1}] {2}{3}" -f $marker,$Number,$Title,$suffix) $Tone
+    Write-ConsoleMessage ('    '+$Description) 'Muted'
+}
+function Show-ConsoleOption {
+    param([int]$Index,[int]$Total,[string]$Title,[string]$Description,[bool]$Enabled)
+    $state='[ ] DESACTIVADO'; $tone='Accent'
+    if ($Enabled) { $state='[x] ACTIVADO'; $tone='OK' }
+    Write-ConsoleMessage ("[{0}/{1}] {2}  {3}" -f $Index,$Total,$Title,$state) $tone
+    Write-ConsoleMessage ('    '+$Description) 'Muted'
+}
+function Format-ConsoleMeter {
+    param([int]$Matching,[int]$Total)
+    # Registry comparison only, never a security/compliance rating.
+    $filled=0
+    if ($Total -gt 0) { $filled=[math]::Min(10,[math]::Max(0,[int][math]::Round(10.0*$Matching/$Total))) }
+    return ('['+('#'*$filled)+('-'*(10-$filled))+']')
 }
 function Show-ProfileChoices {
     param([string]$SelectedProfile)
-    foreach ($item in @(
-        @{Key='Corporate';Title='[1] [#] CORPORATIVO';Lines=@('USO     Puesto de trabajo de empresa.','SESION  Bloqueo tras 15 min en Windows 8.1+.','RED     Retira SMBv1. TLS antiguo: opcional.','REVISAR GPO/MDM, VPN y EDR; no sustituye politicas centrales.')},
-        @{Key='Academy';Title='[2] [=] ACADEMIA';Lines=@('USO     Equipos de alumnos y aulas.','SESION  Bloqueo tras 10 min en Windows 8.1+.','RED     Retira SMBv1. TLS antiguo: opcional.','CUENTAS Puedes crear una cuenta estandar; no restringe cuentas existentes.')},
-        @{Key='Legacy';Title='[3] [!] LEGADO';Lines=@('USO     Software antiguo que necesita compatibilidad.','SESION  15 min en Windows 8.1+; no ajusta bloqueo en Windows 7.','RED     Conserva SMB/TLS antiguos salvo opcion expresa.','REVISAR Aislamiento de red y prueba del software antes de aplicar.')}
-    )) {
-        $title=$item.Title; $tone='Title'
-        if ($item.Key -eq $SelectedProfile) { $title+='  < ACTUAL / ENTER'; $tone='OK' }
-        Show-ConsoleCard $title $item.Lines $tone
-    }
-    Write-ConsoleMessage '[i] Base comun: UAC, firewall, AutoRun y ajustes compatibles con la version.'
-    Write-ConsoleMessage '[i] Los perfiles no instalan software ni congelan el equipo.'
+    Show-ConsoleChoiceRow '1' 'CORPORATIVO' '15 min de bloqueo | SMBv1 desactivado | revisar GPO/MDM' ($SelectedProfile -eq 'Corporate')
+    Show-ConsoleChoiceRow '2' 'ACADEMIA' '10 min de bloqueo | SMBv1 desactivado | cuenta estandar opcional' ($SelectedProfile -eq 'Academy')
+    Show-ConsoleChoiceRow '3' 'LEGADO' '15 min (Win 8.1+) | conserva SMB/TLS antiguos | revisar aislamiento' ($SelectedProfile -eq 'Legacy') 'Warn'
+    Write-ConsoleMessage 'Base comun: UAC, firewall y AutoRun. Ningun perfil instala software.' 'Muted'
 }
 function Show-OperationChoices {
-    Show-ConsoleCard '[1] [?] AUDITAR  < PREDETERMINADO' @('Lee el estado y genera informes.','No aplica ajustes al sistema. Ideal para la primera pasada.') 'OK'
-    Show-ConsoleCard '[2] [>] PREPARAR Y APLICAR' @('Selecciona opciones y revisa el plan antes de confirmar.','Puede cambiar registro, energia, servicios y cuentas seleccionadas.') 'Warn'
+    Show-ConsoleChoiceRow '1' 'AUDITAR' 'Solo lectura de configuracion; guarda evidencias. No aplica ajustes.' $true
+    Show-ConsoleChoiceRow '2' 'PREPARAR CAMBIOS' 'Revisa opciones y plan antes de confirmar la aplicacion.' $false 'Warn'
 }
 function Get-ProfileDescription {
     param([string]$SelectedProfile)
@@ -201,57 +220,57 @@ function Read-ConsoleChoice {
 }
 function Show-WorkstationHeader {
     param($Inventory,[string]$SelectedProfile)
-    Show-ConsoleSection 'SYSADMIN / PREPARACION DE EQUIPOS'
-    Write-ConsoleMessage (Get-ProfileDescription $SelectedProfile) 'Title'
-    Write-ConsoleMessage ("Equipo: {0} | {1} {2} | {3}" -f $Inventory.Computer,$Inventory.Manufacturer,$Inventory.Model,$Inventory.Device)
-    Write-ConsoleMessage ("Sistema: {0} | build {1} | {2}" -f $Inventory.OS,$Inventory.Build,$Inventory.Edition)
-    Write-ConsoleMessage ("Licencia Windows: {0}" -f (Get-OptionalProperty $Inventory 'License'))
-    Write-ConsoleMessage ("Motor: PowerShell {0} / {1} | Proceso: {2} bits" -f $PSVersionTable.PSVersion,$PSVersionTable.PSEdition,([IntPtr]::Size*8))
-    Write-ConsoleMessage ("Usuario de ejecucion: {0}" -f $Inventory.User)
+    Show-ConsoleSection 'SYSADMIN / WORKSTATION'
+    Write-ConsoleMessage ("{0}  |  {1} {2}  |  {3}" -f $Inventory.Computer,$Inventory.Manufacturer,$Inventory.Model,$Inventory.Device) 'Accent'
+    Write-ConsoleMessage ("{0}  /  build {1}  /  {2}" -f $Inventory.OS,$Inventory.Build,$Inventory.Edition)
+    Write-ConsoleMessage ("Perfil: {0}  |  Cuenta: {1}" -f $SelectedProfile,$Inventory.User)
+    Write-ConsoleMessage ("Licencia: {0}" -f (Get-OptionalProperty $Inventory 'License')) 'Muted'
+    Write-ConsoleMessage ("PowerShell {0} / {1} bits" -f $PSVersionTable.PSVersion,([IntPtr]::Size*8)) 'Muted'
     if ($Inventory.Managed) {
         $sources=@(Get-OptionalProperty $Inventory 'ManagedEvidence' 'dominio o MDM') -join ', '
-        Write-ConsoleMessage ("[REVISION] Indicios de gestion: {0}. Verifica las politicas centrales." -f $sources) 'Warn'
+        Write-ConsoleMessage ("[REVISION] Equipo gestionado: {0}. Verifica politicas centrales." -f $sources) 'Warn'
     }
-    Write-ConsoleMessage 'La auditoria observa valores; no certifica cumplimiento ni efectividad tras reinicio.'
 }
 function Show-WorkstationPlan {
     param([object[]]$Observed,[bool]$PowerChange)
-    Show-ConsoleSection 'PLAN / ANTES DE CONFIRMAR'
+    Show-ConsoleSection 'PLAN / REVISION ANTES DE APLICAR'
+    $total=@($Observed).Count
     $pending=@($Observed | Where-Object {-not $_.Matches}).Count
-    Show-ConsoleCard '[>] RESUMEN DE AJUSTES' @(
-        ('[!] {0} valores pendientes de cambio' -f $pending),
-        ('[OK] {0} valores ya coinciden' -f (@($Observed).Count-$pending)),
-        '[i] Energia y cuentas se detallan aparte. Aun no se ha aplicado este plan.')
-    Write-ConsoleMessage '[OK] Coincide  |  [CAMBIO] Pendiente  |  [MANUAL] Revision del tecnico'
+    $matching=$total-$pending
+    Write-ConsoleMessage ("REGISTRO  {0}  {1} coinciden  |  {2} pendientes" -f (Format-ConsoleMeter $matching $total),$matching,$pending) 'Accent'
+    Write-ConsoleMessage 'Comparacion de valores del registro; no es una puntuacion de seguridad.' 'Muted'
     foreach ($group in @(Get-PlanSummary $Observed)) {
-        $tag='OK'; $tone='OK'
-        if ($group.Pending) { $tag='CAMBIO'; $tone='Warn' }
-        Write-ConsoleMessage ("[{0}] {1}: {2} pendientes / {3} valores coincidentes" -f $tag,$group.Category,$group.Pending,$group.Matching) $tone
+        $tone='OK'; $tag='OK'
+        if ($group.Pending) { $tone='Warn'; $tag='CAMBIO' }
+        Write-ConsoleMessage ("[{0}] {1}: {2} pendientes / {3} coinciden" -f $tag,$group.Category,$group.Pending,$group.Matching) $tone
     }
-    if ($PowerChange) { Write-ConsoleMessage '[CAMBIO] Energia: seleccionar Equilibrado; conservar tiempos y ajustes existentes.' 'Warn' }
+    if ($PowerChange) { Write-ConsoleMessage '[CAMBIO] Energia: seleccionar Equilibrado sin alterar los tiempos actuales.' 'Warn' }
     else { Write-ConsoleMessage '[OK] Energia: Equilibrado ya seleccionado.' 'OK' }
-    if ($StandardUserName) { Write-ConsoleMessage "[CAMBIO] Nueva cuenta estandar: $StandardUserName (password solicitado al crearla)." 'Warn' }
-    Write-ConsoleMessage '[ALCANCE] Animaciones: solo el usuario ejecutor. Servicios/SMB: comprobar despues de reiniciar.'
-    Write-ConsoleMessage '[MANUAL] Firmware, permisos de carpetas, cuotas de restauracion y prueba de aplicaciones.'
+    if ($StandardUserName) { Write-ConsoleMessage "Nueva cuenta estandar: $StandardUserName (password solicitado al crearla)." 'Warn' }
+    Write-ConsoleMessage 'Revisar tras reiniciar: red, servicios, aplicaciones y bloqueo de sesion.' 'Muted'
+    Write-ConsoleMessage 'Pendiente de revision manual: firmware, ACL y recuperacion.' 'Muted'
     if ($Detailed) {
-        Show-ConsoleSection 'DETALLE TECNICO / SIN MOSTRAR COMANDOS DE ARRANQUE'
+        Show-ConsoleSection 'DETALLE TECNICO / VALORES Y RUTAS'
         foreach ($item in $Observed) {
             $tag='CAMBIO'; if ($item.Matches) { $tag='OK' }
             Write-ConsoleMessage "[$tag] $($item.Path) / $($item.Name)"
         }
-    } else { Write-ConsoleMessage 'Usa -Detailed para ver rutas y nombres de valores. El informe conserva el detalle.' }
+    } else { Write-ConsoleMessage 'Usa -Detailed para ver nombres y rutas, sin mostrar comandos de inicio.' 'Muted' }
 }
 function Show-RunResult {
     param([string]$RunDirectory,[string]$Result,[int]$Applied=0)
     Show-ConsoleSection "RESULTADO / $Result"
-    if ($Result -eq 'AUDITORIA') { Write-ConsoleMessage '[OK] Auditoria terminada. No se han cambiado ajustes del sistema.' 'OK' }
-    else {
-        Write-ConsoleMessage "[OK] $Applied operaciones registradas y aplicadas." 'OK'
-        Write-ConsoleMessage '[PENDIENTE] Reiniciar manualmente y comprobar aplicaciones, red y politica efectiva.' 'Warn'
+    if ($Result -eq 'AUDITORIA') {
+        Write-ConsoleMessage '[OK] Auditoria terminada. No se han cambiado ajustes del sistema.' 'OK'
+    } else {
+        Write-ConsoleMessage ("[OK] {0} operaciones registradas y aplicadas." -f $Applied) 'OK'
+        Write-ConsoleMessage '[PENDIENTE] Reinicia y valida red, aplicaciones y politica efectiva.' 'Warn'
     }
-    Write-ConsoleMessage "Informes: $RunDirectory"
-    Write-ConsoleMessage 'diagnostics.txt: estado del equipo | manual-checklist.txt: tareas de entrega'
-    if ($Result -ne 'AUDITORIA') { Write-ConsoleMessage 'state.clixml: recuperar con -Mode Restore -SnapshotPath (las cuentas se conservan).' }
+    Write-ConsoleMessage ("Evidencias: {0}" -f $RunDirectory)
+    Write-ConsoleMessage 'diagnostics.txt / manual-checklist.txt' 'Muted'
+    if ($Result -ne 'AUDITORIA') {
+        Write-ConsoleMessage 'Recuperacion: state.clixml con -Mode Restore -SnapshotPath. Las cuentas se conservan.' 'Muted'
+    }
 }
 
 function Get-DeviceKind {
@@ -772,36 +791,36 @@ if (-not (Test-WorkstationVersion ([version]$inventory.Version) $inventory.Produ
 if ([version]$inventory.Version -lt [version]'10.0' -and -not $PSBoundParameters.ContainsKey('Profile')) { $Profile='Legacy' }
 if ($Mode -eq 'Interactive') {
     Show-WorkstationHeader $inventory $Profile
-    Show-ConsoleSection '1 / PERFIL Y OPERACION'
+    Show-ConsoleSection '01 / PERFIL'
     Show-ProfileChoices $Profile
     $selection=Read-ConsoleChoice "Perfil: 1 Corporativo, 2 Academia, 3 Legado [Enter: $Profile]" @('1','2','3')
     switch ($selection) { '1' {$Profile='Corporate'} '2' {$Profile='Academy'} '3' {$Profile='Legacy'} }
     Write-ConsoleMessage (Get-ProfileDescription $Profile) 'Title'
-    Show-ConsoleSection 'OPERACION / QUE QUIERES HACER'
+    Show-ConsoleSection '02 / OPERACION'
     Show-OperationChoices
     $Mode='Audit'
     if ((Read-ConsoleChoice 'Operacion: 1 Auditar, 2 Preparar cambios [1]' @('1','2') '1') -eq '2') {
         # Reject before requesting four options and account/startup selections.
         Assert-ManagedApplyPolicy $inventory ([bool]$AllowManaged)
         $Mode='Apply'
-        Show-ConsoleSection '2 / OPCIONES (ENTER CONSERVA EL VALOR ACTUAL)'
-        Write-ConsoleMessage 'Solo responde S tras revisar la compatibilidad. Tambien se acepta Y.'
+        Show-ConsoleSection '03 / OPCIONES'
+        Write-ConsoleMessage 'S/N para alternar; Enter conserva la seleccion mostrada.' 'Muted'
         foreach ($option in @(
             @{Name='DisableLegacyProtocols';Text='[1/4] [!] PROTOCOLOS ANTIGUOS';Detail='Desactiva SSL 2/3 y TLS 1.0/1.1, habilita TLS 1.2 y retira SMBv1. Puede romper aplicaciones antiguas.'},
             @{Name='DisableOptionalServices';Text='[2/4] [-] SERVICIOS OPCIONALES';Detail='Deshabilita servicios existentes de Xbox y mapas. Puede afectar juegos y mapas sin conexion.'},
             @{Name='UserExperience';Text='[3/4] [~] EFECTOS VISUALES';Detail="Reduce animaciones y, en Windows 10/11, transparencia. Solo para $($inventory.User)."},
             @{Name='CreateRestorePoint';Text='[4/4] [+] PUNTO DE RESTAURACION';Detail='Solicita un punto previo si Proteccion del sistema lo permite. No sustituye una copia de seguridad.'})) {
             $default='n'; if ([bool](Get-Variable -Name $option.Name -ValueOnly)) {$default='s'}
-            $state='[ ] NO SELECCIONADO'; $tone='Title'
-            if ($default -eq 's') { $state='[x] SELECCIONADO'; $tone='OK' }
-            Show-ConsoleCard $option.Text @($option.Detail,($state+' | Enter conserva esta seleccion.')) $tone
-            $answer=Read-ConsoleChoice ("Activar esta opcion? [S] Si / [N] No / [Enter: $default]") @('s','n','y') $default
+            $optionIndex=[array]::IndexOf(@('DisableLegacyProtocols','DisableOptionalServices','UserExperience','CreateRestorePoint'),$option.Name)+1
+            Show-ConsoleOption $optionIndex 4 $option.Text $option.Detail ($default -eq 's')
+            $answer=Read-ConsoleChoice ("[S] Activar / [N] Omitir [Enter: $default]") @('s','n','y') $default
             Set-Variable -Name $option.Name -Value ($answer -in @('s','y'))
         }
-        Show-ConsoleSection '3 / ARRANQUE Y CUENTAS'
-        Write-ConsoleMessage 'Se conservan todas las entradas salvo seleccion explicita. No selecciones AV, VPN o backup.'
+        Show-ConsoleSection '04 / ARRANQUE Y CUENTAS'
+        Write-ConsoleMessage 'Run: seleccion explicita por nombre; conserva AV, VPN, backup y controladores.' 'Muted'
         foreach ($startup in $inventory.Startup) {
-            Write-ConsoleMessage ("- {0} | {1} | {2}" -f $startup.Name,$startup.User,$startup.Location)
+            Write-ConsoleMessage ("  - {0}  |  {1}" -f $startup.Name,$startup.User)
+            if ($Detailed) { Write-ConsoleMessage ("    Ubicacion: {0}" -f $startup.Location) 'Muted' }
         }
         if (-not @($inventory.Startup).Count) { Write-ConsoleMessage 'No se han encontrado entradas en este inventario.' }
         $startupSelection=Read-Host 'Nombres Run exactos separados por ; [Enter conserva seleccion previa]'
