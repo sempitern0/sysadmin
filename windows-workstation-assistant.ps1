@@ -80,6 +80,85 @@ function Get-WindowsLicenseSummary {
         return ($results -join '; ')
     } catch { return 'No disponible: fallo al consultar el servicio de licencias' }
 }
+function Get-WindowsIdentity {
+    param([version]$Version,[int]$Build,[string]$EditionId,[int]$ProductType=1)
+    # Windows 11 still reports NT version 10.0; use the OS build, not
+    # PowerShell version or potentially stale ProductName registry text.
+    $family='Windows no identificado'
+    if ($ProductType -ne 1) { $family='Windows Server' }
+    elseif ($Version.Major -eq 10) {
+        if ($Build -ge 22000) { $family='Windows 11' }
+        else { $family='Windows 10' }
+    }
+    elseif ($Version.Major -eq 6) {
+        switch ($Version.Minor) {
+            1 { $family='Windows 7' }
+            2 { $family='Windows 8' }
+            3 { $family='Windows 8.1' }
+        }
+    }
+    $names=@{
+        Core='Home'; CoreSingleLanguage='Home Single Language'
+        CoreCountrySpecific='Home China'; Professional='Pro'
+        ProfessionalN='Pro N'; ProfessionalEducation='Pro Education'
+        ProfessionalWorkstation='Pro for Workstations'
+        Education='Education'; EducationN='Education N'
+        Enterprise='Enterprise'; EnterpriseS='Enterprise LTSC'
+        EnterpriseSN='Enterprise LTSC N'; IoTEnterprise='IoT Enterprise'
+        IoTEnterpriseS='IoT Enterprise LTSC'
+    }
+    $edition=$EditionId
+    if ([string]::IsNullOrWhiteSpace($edition)) { $edition='Edicion no disponible' }
+    elseif ($names.ContainsKey($edition)) { $edition=$names[$edition] }
+    return [pscustomobject]@{
+        Family=$family
+        Edition=$edition
+        Label=("{0} {1}" -f $family,$edition)
+    }
+}
+function Get-PreflightInventory {
+    # Read-only WMI and registry access; intentionally safe without elevation.
+    $os=Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
+    $settings=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+    $computer=Get-WmiObject Win32_ComputerSystem -ErrorAction Stop
+    $version=[version]$os.Version
+    $build=[int]$os.BuildNumber
+    $identity=Get-WindowsIdentity $version $build ([string](Get-OptionalProperty $settings 'EditionID' '')) ([int]$os.ProductType)
+    $device=Get-DeviceKind @() ([int]$computer.PCSystemType)
+    try {
+        $enclosure=Get-WmiObject Win32_SystemEnclosure -ErrorAction Stop
+        $device=Get-DeviceKind @($enclosure.ChassisTypes) ([int]$computer.PCSystemType)
+    } catch {
+        # Chassis reporting varies by OEM; a missing enclosure is not fatal.
+    }
+    $release=[string](Get-OptionalProperty $settings 'DisplayVersion' '')
+    $arch='32 bits'
+    if ([Environment]::Is64BitOperatingSystem) { $arch='64 bits' }
+    $supported=Test-WorkstationVersion $version ([int]$os.ProductType) ([int]$os.ServicePackMajorVersion)
+    return [pscustomobject]@{
+        Name=$identity.Label; Family=$identity.Family; Edition=$identity.Edition
+        Build=$build; Release=$release; NTVersion=[string]$os.Version
+        Architecture=$arch; Device=$device; Computer=$env:COMPUTERNAME
+        Manufacturer=[string]$computer.Manufacturer
+        Model=[string]$computer.Model; Supported=$supported
+    }
+}
+function Show-PreflightReport {
+    param($Inventory)
+    Show-ConsoleSection 'SYSADMIN / DIAGNOSTICO PREVIO'
+    Write-ConsoleMessage ("Windows   {0}" -f $Inventory.Name) 'Accent'
+    $releaseText=''
+    if (-not [string]::IsNullOrWhiteSpace($Inventory.Release)) { $releaseText='  /  '+$Inventory.Release }
+    Write-ConsoleMessage ("Version   build {0}{1}  /  {2}" -f $Inventory.Build,$releaseText,$Inventory.Architecture)
+    Write-ConsoleMessage ("Equipo    {0}  /  {1} {2}  /  {3}" -f $Inventory.Computer,$Inventory.Manufacturer,$Inventory.Model,$Inventory.Device)
+    Write-ConsoleMessage ("Motor     PowerShell {0} / {1} / {2} bits" -f $PSVersionTable.PSVersion,$PSVersionTable.PSEdition,([IntPtr]::Size*8)) 'Muted'
+    if ($Inventory.Supported) {
+        Write-ConsoleMessage '[OK] Sistema cliente compatible con el asistente.' 'OK'
+    } else {
+        Write-ConsoleMessage '[NO COMPATIBLE] Version o tipo de sistema fuera de los requisitos.' 'Warn'
+    }
+    Write-ConsoleMessage 'Solo diagnostico. Ningun ajuste aplicado.' 'Muted'
+}
 function Get-NativePowerShellPath {
     param([string]$WindowsDirectory, [bool]$Is64BitOS, [bool]$Is64BitProcess)
     $folder='System32'
@@ -727,11 +806,21 @@ if ($env:OS -eq 'Windows_NT' -and ($PSVersionTable.PSEdition -ne 'Desktop' -or
     exit $LASTEXITCODE
 }
 if ($Mode -eq 'Preflight') {
-    Write-Output "PowerShell: $($PSVersionTable.PSVersion) / $($PSVersionTable.PSEdition)"
-    Write-Output 'Uses native Windows PowerShell 5.1 automatically; Windows 7 SP1 or later client OS; Apply requires elevation.'
-    Write-Output 'No changes made.'
-    if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') { exit 1 }
-    exit 0
+    if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') {
+        Write-ConsoleMessage '[NO COMPATIBLE] Preflight requiere Windows PowerShell 5.1 sobre Windows.' 'Warn'
+        Write-ConsoleMessage 'Solo diagnostico. Ningun ajuste aplicado.'
+        exit 1
+    }
+    try {
+        $preflight=Get-PreflightInventory
+        Show-PreflightReport $preflight
+        if (-not $preflight.Supported) { exit 1 }
+        exit 0
+    } catch {
+        Write-ConsoleMessage ('[ERROR] No se pudo identificar Windows: '+$_.Exception.Message) 'Warn'
+        Write-ConsoleMessage 'Solo diagnostico. Ningun ajuste aplicado.'
+        exit 1
+    }
 }
 if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') { throw 'Run with Windows PowerShell 5.1 (powershell.exe), not PowerShell 7.' }
 if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell to avoid redirected registry views.' }
