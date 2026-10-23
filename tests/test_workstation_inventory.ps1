@@ -5,10 +5,27 @@ $root=Split-Path -Parent $PSScriptRoot
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'windows-workstation-assistant.ps1'),[ref]$tokens,[ref]$errors)
 if ($errors) { throw ($errors | Out-String) }
-foreach ($name in @('Get-OptionalProperty','Test-EnrollmentRecord','Get-ManagementEvidence','Assert-ManagedApplyPolicy','Get-WindowsLicenseSummary')) {
+foreach ($name in @('Get-OptionalProperty','Test-EnrollmentRecord','Get-ManagementEvidence','Assert-ManagedApplyPolicy','Get-WindowsLicenseSummary','Get-WindowsIdentity')) {
     $node=$ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     . ([scriptblock]::Create($node.Extent.Text))
 }
+$cases=@(
+    @{Version='10.0';Build=19045;Edition='Core';Name='Windows 10 Home'},
+    @{Version='10.0';Build=22000;Edition='Professional';Name='Windows 11 Pro'},
+    @{Version='10.0';Build=26100;Edition='CoreSingleLanguage';Name='Windows 11 Home Single Language'},
+    @{Version='10.0';Build=26100;Edition='Education';Name='Windows 11 Education'},
+    @{Version='10.0';Build=26100;Edition='Enterprise';Name='Windows 11 Enterprise'},
+    @{Version='6.1';Build=7601;Edition='Professional';Name='Windows 7 Pro'},
+    @{Version='6.3';Build=9600;Edition='Core';Name='Windows 8.1 Home'}
+)
+foreach ($case in $cases) {
+    $identity=Get-WindowsIdentity ([version]$case.Version) $case.Build $case.Edition 1
+    if ($identity.Label -ne $case.Name) { throw ("OS detection mismatch: {0} != {1}" -f $identity.Label,$case.Name) }
+}
+$server=Get-WindowsIdentity ([version]'10.0') 26100 'Enterprise' 3
+if ($server.Family -ne 'Windows Server') { throw 'Server must never be presented as Windows 11 client' }
+$unknown=Get-WindowsIdentity ([version]'10.0') 26100 'UnlistedEdition' 1
+if ($unknown.Edition -ne 'UnlistedEdition') { throw 'Unknown edition must be identified rather than guessed' }
 $checks=0
 function Assert-Inventory { param([bool]$Condition,[string]$Message) $script:checks++; if (-not $Condition) {throw $Message} }
 foreach ($record in @($null,[pscustomobject]@{},[pscustomobject]@{PSPath='empty'},[pscustomobject]@{Other=1})) {
