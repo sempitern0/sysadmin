@@ -7,7 +7,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 
 if ($errors) {throw ($errors | Out-String)}
 foreach ($name in @('Get-OptionalProperty','Get-NativePowerShellPath','New-CompatibleLaunchCommand','Format-ConsoleText',
     'Get-ProfileDescription','Get-SettingCategory','Get-PlanSummary','Read-ConsoleChoice',
-    'Show-ConsoleCard','Show-ProfileChoices','Show-OperationChoices','Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
+    'Show-ConsoleCard','Show-ConsoleChoiceRow','Show-ConsoleOption','Format-ConsoleMeter','Show-ProfileChoices','Show-OperationChoices','Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
     $nodes=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true))
     if ($nodes.Count -ne 1) {throw "Missing function $name"}
     . ([scriptblock]::Create($nodes[0].Extent.Text))
@@ -38,7 +38,7 @@ foreach ($profile in @('Corporate','Academy','Legacy')) {
 }
 $observed=@([pscustomobject]@{Category='Aplicaciones de inicio';Matches=$false;Path='HKCU:\fixture';Name='Startup';Current='SECRET-COMMAND';Desired='SECRET-VALUE'})
 $text=(Show-WorkstationPlan $observed $true 6>&1 | Out-String)
-Assert-UI ($text -match 'CAMBIO' -and $text -match 'Equilibrado') 'Plain-text plan conveys changes'
+Assert-UI ($text -match 'CAMBIO' -and $text -match 'Equilibrado' -and $text -match 'REGISTRO') 'Plain-text plan conveys changes'
 Assert-UI ($text -notmatch 'SECRET|HKCU:|\x1b') 'Compact output hides values and technical paths, no ANSI'
 $Detailed=$true
 $text=(Show-WorkstationPlan $observed $false 6>&1 | Out-String)
@@ -97,9 +97,38 @@ foreach ($selected in @('Corporate','Academy','Legacy')) {
     $menu=Show-ProfileChoices $selected 6>&1 | Out-String
     Assert-UI (([regex]::Matches($menu,'ACTUAL / ENTER')).Count -eq 1) 'Exactly one default profile marked'
     Assert-UI ($menu -match '\[1\]' -and $menu -match '\[2\]' -and $menu -match '\[3\]') 'Profiles have matching keyboard numbers'
-    Assert-UI ($menu -match '10 min' -and $menu -match '15 min' -and $menu -match 'Conserva SMB') 'Profile differences remain visible without color'
+    Assert-UI ($menu -match '10 min' -and $menu -match '15 min' -and $menu -match 'conserva SMB') 'Profile differences remain visible without color'
     Assert-UI ($menu -notmatch '[^\x00-\x7f]') 'Profile icons remain ASCII for classic consoles'
 }
 $operations=Show-OperationChoices 6>&1 | Out-String
 Assert-UI ($operations -match 'No aplica ajustes' -and $operations -match 'antes de confirmar') 'Read-only and apply modes visibly distinguished'
+foreach ($width in @(24,40,80)) {
+    $originalWidth=Get-Item Function:\Get-ConsoleWidth
+    $script:testWidth=$width
+    try {
+        function Get-ConsoleWidth { return $script:testWidth }
+        $rows=@(
+            (Show-ConsoleChoiceRow '2' 'ACADEMIA' ('Descripcion larga ' * 8) $true 6>&1),
+            (Show-ConsoleOption 1 4 '[!] PROTOCOLOS ANTIGUOS' ('Detalle largo ' * 8) $false 6>&1)
+        ) | ForEach-Object {[string]$_}
+        Assert-UI (@($rows | Where-Object {$_.Length -gt $width}).Count -eq 0) "Responsive rows fit $width columns"
+        Assert-UI (($rows -join ' ') -match 'ACTUAL / ENTER' -and ($rows -join ' ') -match 'DESACTIVADO') 'Choices and state remain readable'
+    } finally { Set-Item Function:\Get-ConsoleWidth $originalWidth.ScriptBlock }
+}
+Assert-UI ((Format-ConsoleMeter 0 0) -eq '[----------]') 'Empty plan does not divide by zero'
+Assert-UI ((Format-ConsoleMeter 10 10) -eq '[##########]') 'All matching meter'
+Assert-UI ((Format-ConsoleMeter 0 10) -eq '[----------]') 'All pending meter'
+$NoColor=$true
+$ui=Show-ProfileChoices 'Academy' 6>&1 | Out-String
+Assert-UI ($ui -notmatch '\x1b') 'No ANSI with NoColor'
+$NoColor=$false
+$priorNoColor=[Environment]::GetEnvironmentVariable('NO_COLOR')
+$env:NO_COLOR='1'
+try {
+    $ui=Show-ProfileChoices 'Academy' 6>&1 | Out-String
+    Assert-UI ($ui -notmatch '\x1b') 'NO_COLOR environment variable respected'
+} finally {
+    if ($null -eq $priorNoColor) { Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }
+    else { $env:NO_COLOR=$priorNoColor }
+}
 Write-Output "PASS: $checks workstation console and engine handoff checks"
