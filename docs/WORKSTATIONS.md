@@ -114,3 +114,13 @@ literal quoted paths; Windows target/interactive acceptance remains a lab gate.
 Interactive mode detects this machine's journals in StateRoot and offers recovery before starting a new preparation. `-Mode Restore` without SnapshotPath opens the same chooser. Select a run to restore recorded registry values and the previous power scheme; recover multiple runs newest first. Accounts and later conflicting changes are retained. HKCU recovery requires the original operator. Corrupt journals are reported and skipped, and completed entries are not offered as pending.
 
 The alternative opens Windows System Restore (`rstrui.exe`) for point selection and confirmation in Windows. This may affect unrelated applications and system settings. The script does not automatically restore or reboot. WhatIf prevents both configuration restoration and opening that wizard. Recovery requires surviving journals or Windows restore points; the prior state cannot be reliably inferred when both are lost.
+
+### Compact console layout
+
+The workstation wizard now uses compact numbered rows, clear current/default
+markers, explicit enabled/disabled flags, and an ASCII matching-value meter in
+the proposed registry plan. This is **not a security compliance score**.
+Output wraps across narrow classic PowerShell consoles without ANSI dependence;
+`-NoColor`, `NO_COLOR` and redirected output remain supported. Startup rows
+show name and user by default; `-Detailed` also shows inventory locations,
+without printing startup command values. Mutating behavior is unchanged.
