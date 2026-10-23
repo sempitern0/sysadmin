@@ -238,3 +238,17 @@ Al iniciar sin parametros, si hay diarios del equipo en `C:\ProgramData\Workstat
 - **Restauracion de Windows:** abre `rstrui.exe` para revisar los puntos realmente disponibles y confirmar alli. Puede revertir otros cambios de sistema y aplicaciones; no equivale a revertir solo este script. No selecciona puntos ni fuerza reinicios automaticamente.
 
 `-WhatIf` evita tanto las escrituras de recuperacion como abrir el asistente de Windows. Los diarios ya recuperados no aparecen como pendientes; los diarios corruptos se avisan y omiten. La deteccion depende de conservar el historial local: sin diario ni punto de restauracion no se puede reconstruir con fiabilidad el estado anterior. Que exista `restore-point.clixml` no garantiza que Windows conserve aquel punto.
+
+## Interfaz compacta de consola
+
+El asistente utiliza filas numeradas, indicador `> ... < ACTUAL / ENTER`,
+opciones con `[x] ACTIVADO` / `[ ] DESACTIVADO` y un resumen del plan
+con barra ASCII de coincidencias. La barra solo compara valores de registro:
+**no representa nivel de seguridad ni certificacion**. Las secciones son
+compactas y adaptan las lineas al ancho disponible (24 a 100 columnas).
+
+En el bloque de arranque, la lista compacta muestra nombre y usuario; utiliza
+`-Detailed` para mostrar tambien las rutas del inventario. No se exponen
+comandos de arranque. `-NoColor`, `NO_COLOR` y la redireccion conservan
+una salida legible solo con texto ASCII, sin depender de secuencias ANSI.
+Los perfiles, validaciones, confirmaciones y acciones de escritura no cambian.
