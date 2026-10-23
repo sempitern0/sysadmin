@@ -1,0 +1,134 @@
+#requires -Version 5.1
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 2.0
+$root=Split-Path -Parent $PSScriptRoot
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'windows-workstation-assistant.ps1'),[ref]$tokens,[ref]$errors)
+if ($errors) {throw ($errors | Out-String)}
+foreach ($name in @('Get-OptionalProperty','Get-NativePowerShellPath','New-CompatibleLaunchCommand','Format-ConsoleText',
+    'Get-ProfileDescription','Get-SettingCategory','Get-PlanSummary','Read-ConsoleChoice',
+    'Show-ConsoleCard','Show-ConsoleChoiceRow','Show-ConsoleOption','Format-ConsoleMeter','Show-ProfileChoices','Show-OperationChoices','Get-ConsoleWidth','Write-ConsoleMessage','Show-ConsoleSection','Show-WorkstationPlan','Show-RunResult','Show-WorkstationHeader')) {
+    $nodes=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true))
+    if ($nodes.Count -ne 1) {throw "Missing function $name"}
+    . ([scriptblock]::Create($nodes[0].Extent.Text))
+}
+$checks=0
+function Assert-UI { param([bool]$Condition,[string]$Message) $script:checks++; if (-not $Condition) {throw $Message} }
+foreach ($width in @(24,40,80)) {
+    $lines=@(Format-ConsoleText ('long/path/'*25+' a sentence with spaces') $width)
+    Assert-UI (@($lines | Where-Object {$_.Length -gt $width}).Count -eq 0) 'No truncation or line overflow'
+    Assert-UI ($lines.Count -gt 1) 'Long content wraps'
+}
+Assert-UI ((Format-ConsoleText "name$([char]27)[31m`tvalue" 80) -notmatch '[\x00-\x1f]') 'Control characters sanitized'
+foreach ($profile in @('Corporate','Academy','Legacy')) { Assert-UI ([bool](Get-ProfileDescription $profile)) "Profile summary $profile" }
+$summary=@(Get-PlanSummary @(
+    [pscustomobject]@{Category='Security';Matches=$true},
+    [pscustomobject]@{Category='Security';Matches=$false},
+    [pscustomobject]@{Category='Privacy';Matches=$true}))
+Assert-UI ($summary.Count -eq 2) 'Grouped categories'
+Assert-UI (($summary | Where-Object {$_.Category -eq 'Security'}).Pending -eq 1) 'Pending count'
+Assert-UI (($summary | Where-Object {$_.Category -eq 'Security'}).Matching -eq 1) 'Already configured count'
+Assert-UI (@(Get-PlanSummary @()).Count -eq 0) 'Empty plan supported'
+Assert-UI ((Get-SettingCategory ([pscustomobject]@{Kind='DWord';Path='HKLM:\SYSTEM\mrxsmb10';Name='Start'})) -eq 'Protocolos de red') 'SMB driver not mislabeled optional service'
+$NoColor=$true; $Detailed=$false; $StandardUserName=''
+$inventory=[pscustomobject]@{Computer='TEST-PC';Manufacturer='OEM';Model='Notebook';Device='Laptop';OS='Windows 11 Pro';Build='26100';Edition='Professional';User='TEST\operator';Managed=$true}
+foreach ($profile in @('Corporate','Academy','Legacy')) {
+    $header=(Show-WorkstationHeader $inventory $profile 6>&1 | Out-String)
+    Assert-UI ($header -match 'Windows 11 Pro' -and $header -match 'gestionado') "Header shows OS and managed context: $profile"
+}
+$observed=@([pscustomobject]@{Category='Aplicaciones de inicio';Matches=$false;Path='HKCU:\fixture';Name='Startup';Current='SECRET-COMMAND';Desired='SECRET-VALUE'})
+$text=(Show-WorkstationPlan $observed $true 6>&1 | Out-String)
+Assert-UI ($text -match 'CAMBIO' -and $text -match 'Equilibrado' -and $text -match 'REGISTRO') 'Plain-text plan conveys changes'
+Assert-UI ($text -notmatch 'SECRET|HKCU:|\x1b') 'Compact output hides values and technical paths, no ANSI'
+$Detailed=$true
+$text=(Show-WorkstationPlan $observed $false 6>&1 | Out-String)
+Assert-UI ($text -match 'HKCU:' -and $text -notmatch 'SECRET') 'Detailed output still hides startup command contents'
+$text=(Show-RunResult 'fixture' 'AUDITORIA' 0 6>&1 | Out-String)
+Assert-UI ($text -match 'No se han cambiado') 'Audit does not claim changes applied'
+$answers=New-Object 'System.Collections.Generic.Queue[string]'
+$answers.Enqueue('invalid');$answers.Enqueue('2')
+function Read-Host {param($Prompt) return $answers.Dequeue()}
+$result=Read-ConsoleChoice 'test' @('1','2') '1'
+Assert-UI ($result -eq '2' -and $answers.Count -eq 0) 'Invalid selection re-prompts'
+$temp=Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+[void](New-Item -ItemType Directory -Path $temp)
+try {
+    Assert-UI ((Get-NativePowerShellPath $temp $true $false) -match 'Sysnative') '32-bit process routes to native 64-bit'
+    Assert-UI ((Get-NativePowerShellPath $temp $true $true) -match 'System32') '64-bit process uses System32'
+    Assert-UI ((Get-NativePowerShellPath $temp $false $false) -match 'System32') '32-bit OS remains 32-bit'
+    $fixture=Join-Path $temp "fixture ' quoted.ps1"
+    @'
+[CmdletBinding(SupportsShouldProcess=$true)]
+param([string]$Profile,[string[]]$DisableStartupName,[switch]$Detailed)
+[pscustomobject]@{Profile=$Profile;Names=$DisableStartupName;Detailed=[bool]$Detailed;WhatIf=[bool]$WhatIfPreference;Confirm=[bool]$PSBoundParameters['Confirm']} | ConvertTo-Json -Compress
+'@ | Set-Content -LiteralPath $fixture -Encoding UTF8
+    $params=@{Profile='Academy';DisableStartupName=@('literal $value','quote''; & text');Detailed=$true;WhatIf=$true;Confirm=$false}
+    $encoded=New-CompatibleLaunchCommand $fixture $params
+    $exe=Join-Path $PSHOME $(if ($env:OS -eq 'Windows_NT') {if ($PSVersionTable.PSEdition -eq 'Desktop') {'powershell.exe'} else {'pwsh.exe'}} else {'pwsh'})
+    $output=& $exe -NoProfile -EncodedCommand $encoded
+    Assert-UI ($LASTEXITCODE -eq 0) 'Compatible child invocation succeeds'
+    $data=($output -join '') | ConvertFrom-Json
+    Assert-UI ($data.Profile -eq 'Academy' -and $data.Detailed) 'Named arguments preserved'
+    Assert-UI ($data.WhatIf -and $data.Confirm -eq $false) 'WhatIf and explicit Confirm false preserved'
+    Assert-UI ($data.Names[0] -ceq 'literal $value' -and $data.Names[1] -ceq "quote'; & text") 'Array arguments never interpreted as shell code'
+    'exit 7' | Set-Content -LiteralPath $fixture -Encoding UTF8
+    $encoded=New-CompatibleLaunchCommand $fixture @{}
+    & $exe -NoProfile -EncodedCommand $encoded
+    Assert-UI ($LASTEXITCODE -eq 7) 'Explicit child failure code retained'
+    'throw "Controlled launch failure"' | Set-Content -LiteralPath $fixture -Encoding UTF8
+    $encoded=New-CompatibleLaunchCommand $fixture @{}
+    $stderr=Join-Path $temp 'stderr.txt'
+    $process=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-OutputFormat','Text','-EncodedCommand',$encoded) -RedirectStandardError $stderr -Wait -PassThru
+    $errorText=Get-Content -LiteralPath $stderr -Raw
+    Assert-UI ($process.ExitCode -eq 1) 'Thrown child error returns failure'
+    Assert-UI ($errorText -match '^Controlled launch failure' -and $errorText -match 'Origen:' -and $errorText -notmatch 'FromBase64String') 'Child errors show only the message, without encoded wrapper'
+} finally { Remove-Item -LiteralPath $temp -Recurse -Force }
+$widthFunction=${function:Get-ConsoleWidth}
+try {
+    foreach ($width in @(24,48,88)) {
+        $script:testWidth=$width
+        function Get-ConsoleWidth { return $script:testWidth }
+        $card=@(Show-ConsoleCard '[!] TEST' @('Long description '*12) 6>&1 | ForEach-Object {[string]$_})
+        Assert-UI (@($card | Where-Object {$_.Length -gt $width}).Count -eq 0) "Card fits $width columns"
+        Assert-UI (@($card | Where-Object {$_ -match '^\|.*\|$'}).Count -gt 1) 'Wrapped card retains borders'
+    }
+} finally { Set-Item Function:\Get-ConsoleWidth $widthFunction }
+foreach ($selected in @('Corporate','Academy','Legacy')) {
+    $menu=Show-ProfileChoices $selected 6>&1 | Out-String
+    Assert-UI (([regex]::Matches($menu,'ACTUAL / ENTER')).Count -eq 1) 'Exactly one default profile marked'
+    Assert-UI ($menu -match '\[1\]' -and $menu -match '\[2\]' -and $menu -match '\[3\]') 'Profiles have matching keyboard numbers'
+    Assert-UI ($menu -match '10 min' -and $menu -match '15 min' -and $menu -match 'conserva SMB') 'Profile differences remain visible without color'
+    Assert-UI ($menu -notmatch '[^\x00-\x7f]') 'Profile icons remain ASCII for classic consoles'
+}
+$operations=Show-OperationChoices 6>&1 | Out-String
+Assert-UI ($operations -match 'No aplica ajustes' -and $operations -match 'antes de confirmar') 'Read-only and apply modes visibly distinguished'
+foreach ($width in @(24,40,80)) {
+    $originalWidth=Get-Item Function:\Get-ConsoleWidth
+    $script:testWidth=$width
+    try {
+        function Get-ConsoleWidth { return $script:testWidth }
+        $rows=@(
+            (Show-ConsoleChoiceRow '2' 'ACADEMIA' ('Descripcion larga ' * 8) $true 6>&1),
+            (Show-ConsoleOption 1 4 '[!] PROTOCOLOS ANTIGUOS' ('Detalle largo ' * 8) $false 6>&1)
+        ) | ForEach-Object {[string]$_}
+        Assert-UI (@($rows | Where-Object {$_.Length -gt $width}).Count -eq 0) "Responsive rows fit $width columns"
+        Assert-UI (($rows -join ' ') -match 'ACTUAL / ENTER' -and ($rows -join ' ') -match 'DESACTIVADO') 'Choices and state remain readable'
+    } finally { Set-Item Function:\Get-ConsoleWidth $originalWidth.ScriptBlock }
+}
+Assert-UI ((Format-ConsoleMeter 0 0) -eq '[----------]') 'Empty plan does not divide by zero'
+Assert-UI ((Format-ConsoleMeter 10 10) -eq '[##########]') 'All matching meter'
+Assert-UI ((Format-ConsoleMeter 0 10) -eq '[----------]') 'All pending meter'
+$NoColor=$true
+$ui=Show-ProfileChoices 'Academy' 6>&1 | Out-String
+Assert-UI ($ui -notmatch '\x1b') 'No ANSI with NoColor'
+$NoColor=$false
+$priorNoColor=[Environment]::GetEnvironmentVariable('NO_COLOR')
+$env:NO_COLOR='1'
+try {
+    $ui=Show-ProfileChoices 'Academy' 6>&1 | Out-String
+    Assert-UI ($ui -notmatch '\x1b') 'NO_COLOR environment variable respected'
+} finally {
+    if ($null -eq $priorNoColor) { Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }
+    else { $env:NO_COLOR=$priorNoColor }
+}
+Write-Output "PASS: $checks workstation console and engine handoff checks"
