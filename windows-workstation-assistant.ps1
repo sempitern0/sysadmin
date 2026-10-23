@@ -157,7 +157,7 @@ function Show-PreflightReport {
     } else {
         Write-ConsoleMessage '[NO COMPATIBLE] Version o tipo de sistema fuera de los requisitos.' 'Warn'
     }
-    Write-ConsoleMessage 'Solo diagnostico. Ningun ajuste aplicado.' 'Muted'
+    Write-ConsoleMessage 'Solo diagnostico. No changes made. Ningun ajuste aplicado.' 'Muted'
 }
 function Get-NativePowerShellPath {
     param([string]$WindowsDirectory, [bool]$Is64BitOS, [bool]$Is64BitProcess)
@@ -808,7 +808,7 @@ if ($env:OS -eq 'Windows_NT' -and ($PSVersionTable.PSEdition -ne 'Desktop' -or
 if ($Mode -eq 'Preflight') {
     if ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop') {
         Write-ConsoleMessage '[NO COMPATIBLE] Preflight requiere Windows PowerShell 5.1 sobre Windows.' 'Warn'
-        Write-ConsoleMessage 'Solo diagnostico. Ningun ajuste aplicado.'
+        Write-ConsoleMessage 'Solo diagnostico. No changes made. Ningun ajuste aplicado.'
         exit 1
     }
     try {
