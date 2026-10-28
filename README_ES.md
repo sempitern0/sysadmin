@@ -51,6 +51,56 @@ powershell.exe -NoProfile -File .\windows-ad-client-assistant.ps1 -Mode Prefligh
 En Windows utiliza la política de ejecución/firma aprobada por tu organización.
 Los scripts de la raíz son descargables y autónomos.
 
+
+## Descargar y ejecutar el ZIP de Office 2024
+
+El paquete está publicado en [`tools/office24.zip`](https://github.com/sempitern0/sysadmin/blob/main/tools/office24.zip) y contiene `setup.ps1`. Los siguientes ejemplos descargan el ZIP, lo extraen en una carpeta temporal dedicada, localizan `setup.ps1` aunque esté dentro de una subcarpeta y lo ejecutan desde su propia carpeta para respetar las rutas relativas.
+
+**Comando de una línea con PowerShell (`Invoke-WebRequest`):**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; Invoke-WebRequest -Uri $url -OutFile $zip; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'No se encontró setup.ps1 dentro de office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**Comando de una línea usando `curl.exe`:**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; & curl.exe --fail --location --silent --show-error $url --output $zip; if($LASTEXITCODE -ne 0){throw 'Falló la descarga de office24.zip'}; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'No se encontró setup.ps1 dentro de office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**Comando de una línea usando `wget.exe` (si está instalado):**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; & wget.exe -O $zip $url; if($LASTEXITCODE -ne 0){throw 'Falló la descarga de office24.zip'}; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'No se encontró setup.ps1 dentro de office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**Versión paso a paso (más sencilla de revisar y diagnosticar):**
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$url = 'https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'
+$zip = Join-Path $env:TEMP 'office24.zip'
+$dir = Join-Path $env:TEMP 'office24-setup'
+
+Invoke-WebRequest -Uri $url -OutFile $zip
+Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+
+$setup = Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse |
+    Select-Object -First 1
+if (-not $setup) { throw 'No se encontró setup.ps1 dentro de office24.zip' }
+
+Push-Location $setup.DirectoryName
+try {
+    # Revisa setup.ps1 antes de ejecutarlo; eleva la consola solo si el script lo requiere.
+    & $setup.FullName
+} finally {
+    Pop-Location
+}
+```
+
+Estos comandos descargan la versión actual del ZIP en `main`, por lo que su contenido puede cambiar. Para despliegues administrados, fija una release o un commit revisado y comprueba el SHA-256 del ZIP antes de ejecutarlo. Revisa `setup.ps1` y respeta la política de ejecución/firma de PowerShell aprobada para el equipo; estos ejemplos no desactivan esa política ni usan `ExecutionPolicy Bypass`.
+
 ## Desplegar una revisión verificada
 
 La [guía de lanzamiento](docs/DEPLOYMENT_ES.md) explica cómo elegir el asistente, descargar por commit, comprobar hashes/sintaxis, copiar por SSH y lanzar en Windows. CI genera un paquete con checksums solo tras superar las comprobaciones Linux y Windows PowerShell 5.1/7.
