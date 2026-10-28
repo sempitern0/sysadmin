@@ -38,7 +38,7 @@ sites/*
 
 ### PowerShell ###
 # Exclude packaged modules
-*.zip
+#*.zip
 
 # Exclude .NET assemblies from source
 *.dll
