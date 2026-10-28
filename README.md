@@ -51,6 +51,56 @@ powershell.exe -NoProfile -File .\windows-ad-client-assistant.ps1 -Mode Prefligh
 Use your organization's approved script execution/signing policy on Windows.
 All root scripts are standalone downloads.
 
+
+## Download and run the Office 2024 setup ZIP
+
+The package is published at [`tools/office24.zip`](https://github.com/sempitern0/sysadmin/blob/main/tools/office24.zip) and contains `setup.ps1`. The examples below download it, extract it to a dedicated temporary folder, locate `setup.ps1` even if it is nested in a directory, and launch it from its own folder so relative paths work.
+
+**PowerShell one-liner (`Invoke-WebRequest`):**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; Invoke-WebRequest -Uri $url -OutFile $zip; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'setup.ps1 was not found in office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**PowerShell one-liner using `curl.exe`:**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; & curl.exe --fail --location --silent --show-error $url --output $zip; if($LASTEXITCODE -ne 0){throw 'office24.zip download failed'}; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'setup.ps1 was not found in office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**PowerShell one-liner using `wget.exe` (if installed):**
+
+```powershell
+$ErrorActionPreference='Stop'; $url='https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'; $zip=Join-Path $env:TEMP 'office24.zip'; $dir=Join-Path $env:TEMP 'office24-setup'; & wget.exe -O $zip $url; if($LASTEXITCODE -ne 0){throw 'office24.zip download failed'}; Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; $setup=Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse | Select-Object -First 1; if(-not $setup){throw 'setup.ps1 was not found in office24.zip'}; Push-Location $setup.DirectoryName; try { & $setup.FullName } finally { Pop-Location }
+```
+
+**Step-by-step version (easier to inspect and troubleshoot):**
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$url = 'https://raw.githubusercontent.com/sempitern0/sysadmin/main/tools/office24.zip'
+$zip = Join-Path $env:TEMP 'office24.zip'
+$dir = Join-Path $env:TEMP 'office24-setup'
+
+Invoke-WebRequest -Uri $url -OutFile $zip
+Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+
+$setup = Get-ChildItem -LiteralPath $dir -Filter 'setup.ps1' -File -Recurse |
+    Select-Object -First 1
+if (-not $setup) { throw 'setup.ps1 was not found in office24.zip' }
+
+Push-Location $setup.DirectoryName
+try {
+    # Inspect setup.ps1 first; elevate this console only if the script requires it.
+    & $setup.FullName
+} finally {
+    Pop-Location
+}
+```
+
+These commands use the current `main` version of the ZIP, so the package can change over time. For managed deployments, pin a reviewed release or commit and verify the ZIP's SHA-256 before executing it. Review `setup.ps1` and follow the machine's approved PowerShell execution/signing policy; these examples do not disable that policy or use `ExecutionPolicy Bypass`.
+
 ## Deploy a verified revision
 
 The [launch guide](docs/DEPLOYMENT.md) covers assistant selection, commit-pinned downloads, hash/syntax checks, SSH transfer and Windows execution. CI packages scripts with checksums only after Linux and Windows PowerShell 5.1/7 checks pass.
