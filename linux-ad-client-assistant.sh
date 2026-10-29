@@ -102,18 +102,27 @@ PRESET_SWITCH_MODE=0
 # UI / logging
 # ---------------------------------------------------------------------------
 
+acquire_runtime_lock() {
+    exec {RUNTIME_LOCK_FD}>"$STATE_ROOT/assistant.lock" || return 1
+    flock -n "$RUNTIME_LOCK_FD" || { printf 'Another AD client assistant is running.\n' >&2; return 1; }
+}
+
 init_runtime() {
     (( EUID == 0 )) || {
         printf 'Run this assistant as root (sudo).\n' >&2
         exit 1
     }
 
-    mkdir -p "$STATE_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" "$REMOTE_SECURITY_DIR"
-    chmod 0700 "$STATE_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" 2>/dev/null || true
+    command_exists flock || { printf 'flock is required for safe concurrent operation.\n' >&2; return 1; }
+    [[ -d /run/systemd/system ]] || { printf 'A running systemd host is required.\n' >&2; return 1; }
+    mkdir -p "$STATE_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" "$REMOTE_SECURITY_DIR" || return 1
+    chmod 0700 "$STATE_ROOT" "$BACKUP_ROOT" "$LOG_ROOT" "$REMOTE_SECURITY_DIR" || return 1
+    # Keep the lock for the entire process, including recovery and cleanup.
+    acquire_runtime_lock || return 1
 
     RUN_LOG="${LOG_ROOT}/${RUN_ID}.log"
-    : >"$RUN_LOG"
-    chmod 0600 "$RUN_LOG"
+    : >"$RUN_LOG" || return 1
+    chmod 0600 "$RUN_LOG" || return 1
 
     if { exec {INPUT_FD}<>/dev/tty; } 2>/dev/null; then :; fi
 
@@ -4351,6 +4360,17 @@ No password is persisted, no third-party repository is added, and supported join
 EOF
 }
 
+validate_runtime_settings() {
+    local name value
+    for name in AD_CLIENT_NETWORK_TIMEOUT AD_CLIENT_MEMBERSHIP_TIMEOUT AD_CLIENT_SLOW_NETWORK_TIMEOUT; do
+        value="${!name}"
+        if [[ ! "$value" =~ ^[1-9][0-9]{0,3}$ ]] || (( value > 3600 )); then
+            printf 'Invalid %s: use integer seconds from 1 to 3600.\n' "$name" >&2
+            return 2
+        fi
+    done
+}
+
 # Read-only launch check: no elevation, package installation or runtime state.
 launch_preflight() {
     local failures=0 tool os_id=unknown
@@ -4367,7 +4387,7 @@ launch_preflight() {
         printf '[FAIL] A running systemd host is required for lifecycle operations.\n'
         failures=1
     fi
-    for tool in ip systemctl hostname; do
+    for tool in ip systemctl hostname flock timeout; do
         if command -v "$tool" >/dev/null 2>&1; then
             printf '[OK] %s\n' "$tool"
         else
@@ -4427,6 +4447,7 @@ main() {
         shift
     done
 
+    validate_runtime_settings || return $?
     if [[ "$mode" == preflight ]]; then launch_preflight; return $?; fi
     case "$mode" in
         audit|status|snapshots|security-watch) ;;
@@ -4435,7 +4456,7 @@ main() {
                return 2
            fi ;;
     esac
-    init_runtime
+    init_runtime || return $?
 
     case "$mode" in
         manage) main_menu ;;

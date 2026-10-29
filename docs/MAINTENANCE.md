@@ -70,3 +70,27 @@ Before approving a production change, exercise preflight → audit → change �
 Workstation regression tests (`tests/test_workstations.ps1`) import only allowlisted
 functions and mock all system writes. They cover per-edition plans, journal-before-write,
 idempotency and conflict-safe recovery; live Windows 7/8.1/10/11 acceptance remains required.
+
+## Standalone client runtime review · 2026-10-29
+
+Each root assistant remains independently downloadable. No launcher, runtime imports,
+repository checkout or companion script is required. Improvements belong inside the
+assistant that owns the operation; development tools and tests stay optional.
+
+- Both Linux AD clients validate NETWORK/MEMBERSHIP/SLOW_NETWORK timeout environment
+  variables before creating runtime state: integer seconds 1–3600, no leading zeros.
+- Protected state/log directory and log initialization failures stop execution.
+- Both variants require a running systemd host and flock for operational modes,
+  and hold an exclusive lock through cleanup. Help and preflight remain independent
+  of elevation and a controlling terminal.
+- Regression tests verify invalid environment values and lock contention/release
+  using temporary files. The generated RHEL variant remains synchronized.
+
+Validation: `python3 tools/verify.py --require-shellcheck`. PowerShell and live
+package/AD/Windows/reboot/recovery checks were unavailable locally; the existing
+CI matrix and disposable-host acceptance remain required.
+
+Resumen: cada asistente raíz sigue funcionando por descarga individual, sin lanzador
+ni archivos auxiliares. Los clientes Linux incorporan validación de timeouts,
+comprobación de directorios/logs y bloqueo de ejecuciones simultáneas. Las pruebas
+son aisladas y no certifican operaciones AD ni recuperación en equipos reales.
