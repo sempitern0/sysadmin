@@ -70,3 +70,28 @@ Before approving a production change, exercise preflight → audit → change �
 Workstation regression tests (`tests/test_workstations.ps1`) import only allowlisted
 functions and mock all system writes. They cover per-edition plans, journal-before-write,
 idempotency and conflict-safe recovery; live Windows 7/8.1/10/11 acceptance remains required.
+
+## Operations-console review · 2026-10-29
+
+- Added standalone `sysadmin.sh` with English/Spanish menu navigation and read-only
+  Linux inventory, network, storage, service and log workspaces. Native command output
+  keeps the target system's language. The console launches the existing AD tools;
+  their role boundaries and standalone operation remain intact.
+- Diagnostic probes require GNU timeout and propagate failure/timeout status.
+  Missing optional tools and unavailable service managers are explicit SKIP results.
+- Guided diagnostic package installation prints commands, requires literal INSTALL,
+  uses native confirmations and never deletes package locks or times out a transaction.
+- Added exclusive flock locking to both Linux AD clients, protected-directory/log
+  initialization checks and validation of environment-controlled timeout values.
+- New regressions mock diagnostics and test real temporary-file lock contention,
+  timeout/command failure status, missing tools, no-systemd paths and non-TTY rejection.
+
+See [console behavior, compatibility and examples](OPERATIONS_CONSOLE.md).
+Local validation used Bash, Python and ShellCheck (error severity). PowerShell and
+live package/AD/Windows/reboot/recovery checks were unavailable locally; the existing
+CI matrix remains required. Automated tests are not a production certification.
+
+Resumen: consola Linux organizada, instalación guiada, diagnósticos acotados,
+resultados de error fiables y exclusión de ejecuciones AD simultáneas. La navegación
+se ofrece en inglés/español; las herramientas nativas conservan el idioma del sistema.
+No se certifican entornos no probados ni se sustituye la validación en laboratorio.
