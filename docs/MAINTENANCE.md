@@ -71,27 +71,26 @@ Workstation regression tests (`tests/test_workstations.ps1`) import only allowli
 functions and mock all system writes. They cover per-edition plans, journal-before-write,
 idempotency and conflict-safe recovery; live Windows 7/8.1/10/11 acceptance remains required.
 
-## Operations-console review · 2026-10-29
+## Standalone client runtime review · 2026-10-29
 
-- Added standalone `sysadmin.sh` with English/Spanish menu navigation and read-only
-  Linux inventory, network, storage, service and log workspaces. Native command output
-  keeps the target system's language. The console launches the existing AD tools;
-  their role boundaries and standalone operation remain intact.
-- Diagnostic probes require GNU timeout and propagate failure/timeout status.
-  Missing optional tools and unavailable service managers are explicit SKIP results.
-- Guided diagnostic package installation prints commands, requires literal INSTALL,
-  uses native confirmations and never deletes package locks or times out a transaction.
-- Added exclusive flock locking to both Linux AD clients, protected-directory/log
-  initialization checks and validation of environment-controlled timeout values.
-- New regressions mock diagnostics and test real temporary-file lock contention,
-  timeout/command failure status, missing tools, no-systemd paths and non-TTY rejection.
+Each root assistant remains independently downloadable. No launcher, runtime imports,
+repository checkout or companion script is required. Improvements belong inside the
+assistant that owns the operation; development tools and tests stay optional.
 
-See [console behavior, compatibility and examples](OPERATIONS_CONSOLE.md).
-Local validation used Bash, Python and ShellCheck (error severity). PowerShell and
-live package/AD/Windows/reboot/recovery checks were unavailable locally; the existing
-CI matrix remains required. Automated tests are not a production certification.
+- Both Linux AD clients validate NETWORK/MEMBERSHIP/SLOW_NETWORK timeout environment
+  variables before creating runtime state: integer seconds 1–3600, no leading zeros.
+- Protected state/log directory and log initialization failures stop execution.
+- Both variants require a running systemd host and flock for operational modes,
+  and hold an exclusive lock through cleanup. Help and preflight remain independent
+  of elevation and a controlling terminal.
+- Regression tests verify invalid environment values and lock contention/release
+  using temporary files. The generated RHEL variant remains synchronized.
 
-Resumen: consola Linux organizada, instalación guiada, diagnósticos acotados,
-resultados de error fiables y exclusión de ejecuciones AD simultáneas. La navegación
-se ofrece en inglés/español; las herramientas nativas conservan el idioma del sistema.
-No se certifican entornos no probados ni se sustituye la validación en laboratorio.
+Validation: `python3 tools/verify.py --require-shellcheck`. PowerShell and live
+package/AD/Windows/reboot/recovery checks were unavailable locally; the existing
+CI matrix and disposable-host acceptance remain required.
+
+Resumen: cada asistente raíz sigue funcionando por descarga individual, sin lanzador
+ni archivos auxiliares. Los clientes Linux incorporan validación de timeouts,
+comprobación de directorios/logs y bloqueo de ejecuciones simultáneas. Las pruebas
+son aisladas y no certifican operaciones AD ni recuperación en equipos reales.

@@ -6,28 +6,10 @@ Standalone Windows/Linux administration, Active Directory, diagnostics and recov
 
 RabbitMole (formerly Audit Workbench) has [its own repository](https://github.com/sempitern0/RabbitMole). This repository maintains the console assistants, with no PWA dependency.
 
-## General operations console
-
-Start with `bash sysadmin.sh`: an organized Linux menu for inventory, networking,
-storage, services, logs, diagnostic tools and the existing AD assistants.
-Read-only modes need no root and also work without a terminal:
-
-```bash
-bash sysadmin.sh --preflight
-bash sysadmin.sh --audit
-bash sysadmin.sh --network
-```
-
-Missing tools and restricted environments are reported explicitly. Diagnostics have
-time limits; failed commands produce a nonzero exit status. Install tools through
-the optional guided `--tools` mode.
-[Console guide, platform limits and failure handling](docs/OPERATIONS_CONSOLE.md).
-
 ## Choose your task
 
 | Task | Start here |
 |---|---|
-| General Linux inventory, diagnostics and guided tools | `bash sysadmin.sh` |
 | Administer a Samba AD domain on Debian/Ubuntu | `debian-ad-assistant.sh --audit` |
 | Administer a Samba AD domain on Rocky/AlmaLinux | `rhel-ad-assistant.sh --audit` |
 | Diagnose/manage Windows AD DS | `windows-ad-assistant.ps1 -Mode Audit` |
