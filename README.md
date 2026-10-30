@@ -1,6 +1,8 @@
-# sysadmin
+<p align="center"><img src="icon.svg" width="112" height="112" alt="sysadmin icon"></p>
 
-Standalone Windows/Linux administration, Active Directory, diagnostics and recovery assistants.
+<h1 align="center">sysadmin</h1>
+
+<p align="center"><strong>Windows & Linux administration, Active Directory, diagnostics and recovery.</strong></p>
 
 **English** · [Español](README_ES.md)
 
