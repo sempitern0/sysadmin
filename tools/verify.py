@@ -23,6 +23,11 @@ def main() -> int:
         missing.append('bash (required; use tools/verify_powershell.ps1 on Windows)')
     if shutil.which('shellcheck'):
         commands += [['shellcheck', '--severity=error', *[p.name for p in sorted(ROOT.glob('*.sh'))]]]
+        # Warning-level rules that have caused real defects here. SC2318: a value
+        # used in the same `local` statement is expanded before `local` assigns it,
+        # e.g. `local snap="$1" meta="${snap}/x"` yields "/x".
+        commands += [['shellcheck', '--severity=warning', '--include=SC2318',
+                      *[p.name for p in sorted(ROOT.glob('*.sh'))]]]
     elif args.require_shellcheck:
         missing.append('shellcheck')
     else:

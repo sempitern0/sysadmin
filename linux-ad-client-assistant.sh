@@ -18,6 +18,19 @@
 #
 # No passwords are stored. No third-party repository is added.
 
+# Fail clearly when launched as "sh script.sh" (dash/busybox) or with an old Bash.
+# Keep this block POSIX sh so non-Bash shells can parse and execute it.
+if [ -z "${BASH_VERSION:-}" ]; then
+    printf '%s\n' "This assistant requires Bash 4+. Run: sudo bash $0 --help" \
+        "Este asistente requiere Bash 4+. Ejecuta: sudo bash $0 --help" >&2
+    exit 2
+fi
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    printf '%s\n' "Bash 4+ is required; found ${BASH_VERSION}." \
+        "Se requiere Bash 4+; versión detectada: ${BASH_VERSION}." >&2
+    exit 2
+fi
+
 set -uo pipefail
 IFS=$'\n\t'
 
@@ -958,7 +971,8 @@ identity_precheck() {
 }
 
 record_assistant_package() {
-    local snap="$1" pkg="$2" file="${snap}/packages-installed-by-assistant.txt"
+    local snap="$1" pkg="$2"
+    local file="${snap}/packages-installed-by-assistant.txt"
     touch "$file"
     grep -Fxq "$pkg" "$file" 2>/dev/null || printf '%s\n' "$pkg" >>"$file"
 }
@@ -1753,7 +1767,8 @@ EOF
 }
 
 restore_network_from_snapshot() {
-    local snap="$1" meta="${snap}/snapshot.env"
+    local snap="$1"
+    local meta="${snap}/snapshot.env"
     [[ -f "$meta" ]] || { err "Snapshot metadata missing: $meta"; return 1; }
 
     unset DNS_BACKEND NM_CONNECTION NM_CONNECTION_UUID ACTIVE_IFACE

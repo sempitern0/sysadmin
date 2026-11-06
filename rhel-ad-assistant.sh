@@ -27,6 +27,19 @@
 #   - use a dedicated systemd unit when the distribution does not provide one
 #   - remain usable as one readable/editable Bash script
 
+# Fail clearly when launched as "sh script.sh" (dash/busybox) or with an old Bash.
+# Keep this block POSIX sh so non-Bash shells can parse and execute it.
+if [ -z "${BASH_VERSION:-}" ]; then
+    printf '%s\n' "This assistant requires Bash 4+. Run: sudo bash $0 --help" \
+        "Este asistente requiere Bash 4+. Ejecuta: sudo bash $0 --help" >&2
+    exit 2
+fi
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    printf '%s\n' "Bash 4+ is required; found ${BASH_VERSION}." \
+        "Se requiere Bash 4+; versión detectada: ${BASH_VERSION}." >&2
+    exit 2
+fi
+
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
@@ -221,7 +234,8 @@ pause_ui() {
 }
 
 atomic_write() {
-    local path="$1" tmp="${path}.tmp.$$"
+    local path="$1"
+    local tmp="${path}.tmp.$$"
     cat >"$tmp"
     chmod 0600 "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$path"
@@ -526,7 +540,9 @@ network_snapshot() {
 }
 
 snapshot_file() {
-    local snap="$1" path="$2" key="$(printf '%s' "$path" | sed 's#^/##;s#/#__#g')"
+    local snap="$1" path="$2"
+    local key
+    key="$(printf '%s' "$path" | sed 's#^/##;s#/#__#g')"
     mkdir -p "$snap/files"
     if [[ -e "$path" || -L "$path" ]]; then cp -a -- "$path" "$snap/files/$key"; printf '%s\tpresent\t%s\n' "$path" "$key" >>"$snap/files.tsv";
     else printf '%s\tabsent\t%s\n' "$path" "$key" >>"$snap/files.tsv"; fi

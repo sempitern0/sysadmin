@@ -45,6 +45,35 @@ foreach ($command in @('Test-PublicIpForGuardedIps','Test-ClientPublicIpCandidat
     }
     Assert-Equal $true (& $command '8.8.8.8') "$command public address"
 }
+# Config files must keep their original BOM state on both Windows PowerShell 5.1
+# and PowerShell 7 (5.1 `Set-Content -Encoding UTF8` would add a BOM).
+foreach ($file in @('windows-ad-assistant.ps1','windows-ad-client-assistant.ps1')) {
+    Import-PureFunction $file @('Read-ConfigText','Write-ConfigText')
+    $tmp = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [guid]::NewGuid().ToString() + '.conf')
+    try {
+        foreach ($bom in @($false, $true)) {
+            $text = "<ossec_config>`r`n  <!-- ñ é -->`r`n</ossec_config>`r`n"
+            [System.IO.File]::WriteAllText($tmp, $text, [System.Text.UTF8Encoding]::new($bom))
+            $read = Read-ConfigText -Path $tmp
+            Assert-Equal $bom $read.HasBom "$file BOM detection"
+            Assert-Equal $text $read.Text "$file text decode"
+            Write-ConfigText -Path $tmp -Text ($read.Text + 'x') -HasBom $read.HasBom
+            $bytes = [System.IO.File]::ReadAllBytes($tmp)
+            Assert-Equal $bom ($bytes[0] -eq 0xEF) "$file BOM preserved"
+            Assert-Equal ($text + 'x') (Read-ConfigText -Path $tmp).Text "$file round trip, no trailing newline added"
+        }
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+# Engine handoff argument quoting follows CommandLineToArgvW rules.
+Import-PureFunction 'windows-ad-client-assistant.ps1' @('ConvertTo-HandoffArgument')
+Assert-Equal 'Join' (ConvertTo-HandoffArgument 'Join') 'plain argument'
+Assert-Equal '"C:\Program Data\X"' (ConvertTo-HandoffArgument 'C:\Program Data\X') 'spaced path'
+Assert-Equal '"C:\a b\\"' (ConvertTo-HandoffArgument 'C:\a b\') 'trailing backslash'
+Assert-Equal '"a\"b"' (ConvertTo-HandoffArgument 'a"b') 'embedded quote'
+Assert-Equal '""' (ConvertTo-HandoffArgument '') 'empty argument'
+
 $executable = Join-Path $PSHOME $(if ($env:OS -eq 'Windows_NT') { if ($PSVersionTable.PSEdition -eq 'Desktop') { 'powershell.exe' } else { 'pwsh.exe' } } else { 'pwsh' })
 foreach ($file in @('windows-ad-assistant.ps1','windows-ad-client-assistant.ps1')) {
     $output = & $executable -NoProfile -NonInteractive -File (Join-Path $root $file) -Mode Preflight 2>&1
