@@ -113,6 +113,65 @@ if ($Mode -eq 'Preflight') {
     exit ([int]$result[-1])
 }
 if ($env:OS -ne 'Windows_NT') { throw 'This assistant requires Windows. Use -Mode Preflight for launch checks.' }
+
+# Engine handoff. This assistant relies on Windows PowerShell 5.1-only cmdlets
+# (ADDSDeployment, GroupPolicy and WMI-era cmdlets) and on 64-bit registry/module views. When launched from
+# PowerShell 7 (pwsh) or a 32-bit host, relaunch the same file with the native
+# 64-bit Windows PowerShell and the original arguments. Set
+# ADASSISTANT_NO_ENGINE_HANDOFF=1 to disable.
+function Get-NativeWindowsPowerShellPath {
+    $root = $env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($root)) { $root = 'C:\Windows' }
+    # A 32-bit process on 64-bit Windows must use Sysnative to reach 64-bit System32.
+    if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+        $candidate = Join-Path $root 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    $candidate = Join-Path $root 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $candidate) { return $candidate }
+    return $null
+}
+
+function ConvertTo-HandoffArgument {
+    param([string]$Value)
+    if ($Value -notmatch '[\s"]' -and $Value.Length -gt 0) { return $Value }
+    # CommandLineToArgvW quoting: double backslashes that precede a quote.
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
+$script:NeedsEngineHandoff = (
+    $env:ADASSISTANT_NO_ENGINE_HANDOFF -ne '1' -and
+    -not [string]::IsNullOrWhiteSpace($PSCommandPath) -and (
+        $PSVersionTable.PSEdition -eq 'Core' -or
+        ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess)
+    )
+)
+if ($script:NeedsEngineHandoff) {
+    $nativeShell = Get-NativeWindowsPowerShellPath
+    if ($nativeShell) {
+        $handoffArgs = New-Object System.Collections.Generic.List[string]
+        foreach ($item in @('-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath)) { $handoffArgs.Add($item) }
+        foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+            if ($entry.Value -is [System.Management.Automation.SwitchParameter]) {
+                if ($entry.Value.IsPresent) { $handoffArgs.Add('-' + $entry.Key) }
+            }
+            else {
+                $handoffArgs.Add('-' + $entry.Key)
+                $handoffArgs.Add([string]$entry.Value)
+            }
+        }
+        $reason = if ($PSVersionTable.PSEdition -eq 'Core') { 'PowerShell {0}' -f $PSVersionTable.PSVersion } else { '32-bit host' }
+        Write-Host ("[INFO] {0} detected; relaunching with 64-bit Windows PowerShell 5.1." -f $reason) -ForegroundColor Cyan
+        $argLine = (@($handoffArgs) | ForEach-Object { ConvertTo-HandoffArgument $_ }) -join ' '
+        $process = Start-Process -FilePath $nativeShell -ArgumentList $argLine -NoNewWindow -Wait -PassThru
+        exit $process.ExitCode
+    }
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        Write-Warning 'Windows PowerShell 5.1 was not found; some cmdlets used by this assistant are unavailable in PowerShell 7.'
+    }
+}
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Administrator privileges are required. Preflight is the only non-elevated mode.'
@@ -7122,6 +7181,26 @@ function Get-WazuhWindowsInfo {
     }
 }
 
+# Third-party configuration files (Wazuh ossec.conf, Suricata YAML) are usually
+# UTF-8 without BOM. Windows PowerShell 5.1 `Set-Content -Encoding UTF8` always
+# prepends a BOM and `Get-Content` without -Encoding reads ANSI; both differ from
+# PowerShell 7. These helpers keep the file's original BOM state on both engines.
+function Read-ConfigText {
+    param([Parameter(Mandatory)][string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $offset = if ($hasBom) { 3 } else { 0 }
+    [pscustomobject]@{
+        Text   = [System.Text.UTF8Encoding]::new($false).GetString($bytes, $offset, $bytes.Length - $offset)
+        HasBom = $hasBom
+    }
+}
+
+function Write-ConfigText {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][AllowEmptyString()][string]$Text, [bool]$HasBom = $false)
+    [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($HasBom))
+}
+
 function Backup-SecurityIntegrationConfig {
     param([Parameter(Mandatory=$true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -7152,7 +7231,8 @@ function Set-WazuhManagerAddress {
 
     $backup = Backup-SecurityIntegrationConfig -Path $info.Config
     try {
-        $raw = Get-Content -LiteralPath $info.Config -Raw -ErrorAction Stop
+        $configFile = Read-ConfigText -Path $info.Config
+        $raw = $configFile.Text
         if ($raw -match '(?is)(<client>.*?<server>.*?<address>)(.*?)(</address>)') {
             $updated = [regex]::Replace(
                 $raw,
@@ -7166,7 +7246,7 @@ function Set-WazuhManagerAddress {
             $updated = $raw.TrimEnd() + "`r`n" + $block
         }
 
-        Set-Content -LiteralPath $info.Config -Value $updated -Encoding UTF8
+        Write-ConfigText -Path $info.Config -Text $updated -HasBom $configFile.HasBom
         if ($info.ServiceName) {
             Restart-Service -Name $info.ServiceName -Force -ErrorAction Stop
             Start-Sleep -Seconds 2
@@ -7192,7 +7272,8 @@ function Enable-WazuhSuricataIngestion {
     if (-not $wazuh.Config) { Write-Console 'Wazuh agent is not installed/configured on this host.' Yellow; return }
     if (-not $suricata.EvePath) { Write-Console 'Suricata EVE JSON was not detected. Configure the EVE path first.' Yellow; return }
 
-    $raw = Get-Content -LiteralPath $wazuh.Config -Raw -ErrorAction Stop
+    $configFile = Read-ConfigText -Path $wazuh.Config
+    $raw = $configFile.Text
     if ($raw -match [regex]::Escape([string]$suricata.EvePath)) {
         Write-Console 'Wazuh already ingests the detected Suricata EVE file.' Green
         return
@@ -7205,7 +7286,7 @@ function Enable-WazuhSuricataIngestion {
         $block = "  <localfile>`r`n    <log_format>json</log_format>`r`n    <location>$($suricata.EvePath)</location>`r`n  </localfile>`r`n"
         if ($raw -notmatch '(?i)</ossec_config>\s*$') { throw 'Wazuh ossec.conf does not contain a closing ossec_config element.' }
         $updated = [regex]::Replace($raw,'(?i)</ossec_config>\s*$',($block + '</ossec_config>' + "`r`n"),1)
-        Set-Content -LiteralPath $wazuh.Config -Value $updated -Encoding UTF8
+        Write-ConfigText -Path $wazuh.Config -Text $updated -HasBom $configFile.HasBom
         if ($wazuh.ServiceName) {
             Restart-Service -Name $wazuh.ServiceName -Force -ErrorAction Stop
             Start-Sleep -Seconds 2

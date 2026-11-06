@@ -107,10 +107,11 @@ foreach ($width in @(24,40,80)) {
     $script:testWidth=$width
     try {
         function Get-ConsoleWidth { return $script:testWidth }
-        $rows=@(
-            (Show-ConsoleChoiceRow '2' 'ACADEMIA' ('Descripcion larga ' * 8) $true 6>&1),
-            (Show-ConsoleOption 1 4 '[!] PROTOCOLOS ANTIGUOS' ('Detalle largo ' * 8) $false 6>&1)
-        ) | ForEach-Object {[string]$_}
+        # Concatenate the two record arrays so each wrapped console line is checked
+        # on its own; a nested array would be stringified as one space-joined row.
+        $rows=@(@(Show-ConsoleChoiceRow '2' 'ACADEMIA' ('Descripcion larga ' * 8) $true 6>&1) +
+            @(Show-ConsoleOption 1 4 '[!] PROTOCOLOS ANTIGUOS' ('Detalle largo ' * 8) $false 6>&1) |
+            ForEach-Object {[string]$_})
         Assert-UI (@($rows | Where-Object {$_.Length -gt $width}).Count -eq 0) "Responsive rows fit $width columns"
         Assert-UI (($rows -join ' ') -match 'ACTUAL / ENTER' -and ($rows -join ' ') -match 'DESACTIVADO') 'Choices and state remain readable'
     } finally { Set-Item Function:\Get-ConsoleWidth $originalWidth.ScriptBlock }

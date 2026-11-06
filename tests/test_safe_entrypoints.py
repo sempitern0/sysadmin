@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -90,6 +91,51 @@ class EntryPoints(unittest.TestCase):
             script += f'{candidate} 8.8.8.8 || exit 21\n{candidate} 08.008.8.8 || exit 22\n'
             result = run_bash(['-s'], code=script)
             self.assertEqual(result.returncode, 0, file + result.stderr)
+
+    def test_non_bash_launch_fails_with_guidance(self):
+        # `sh script.sh` (dash/busybox) must stop before Bash-only syntax runs.
+        sh = shutil.which('sh')
+        if not sh or subprocess.run([sh, '-c', 'printf %s "${BASH_VERSION:-}"'],
+                                    capture_output=True, text=True).stdout:
+            self.skipTest('sh is unavailable or is Bash')
+        for script in SCRIPTS:
+            with self.subTest(script=script.name):
+                result = subprocess.run([sh, str(script), '--help'], text=True,
+                                        capture_output=True, cwd=ROOT, timeout=15)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('requires Bash 4+', result.stderr)
+                self.assertNotIn('Illegal option', result.stderr)
+
+    def test_local_values_are_assigned_before_reuse(self):
+        # Regression for SC2318: callers below deliberately have no variable
+        # named like the callee's first local, so dynamic scoping cannot mask it.
+        with tempfile.TemporaryDirectory() as work:
+            snap = Path(work, 'snap')
+            snap.mkdir()
+            (snap / 'snapshot.env').write_text('')
+            source = Path(work, 'etc-hosts')
+            source.write_text('fixture\n')
+            target = Path(work, 'out', 'config.env')
+            target.parent.mkdir()
+            client = functions('linux-ad-client-assistant.sh', 'record_assistant_package')
+            server = functions('rhel-ad-assistant.sh', 'atomic_write', 'snapshot_file')
+            script = f'''set -euo pipefail
+{client}
+{server}
+cd /
+record_assistant_package {snap} realmd
+grep -qx realmd {snap}/packages-installed-by-assistant.txt || exit 20
+printf 'A=1\\n' | atomic_write {target}
+grep -qx A=1 {target} || exit 21
+: >{snap}/files.tsv
+snapshot_file {snap} {source}
+key="$(cut -f3 {snap}/files.tsv)"
+[[ -n "$key" && -f "{snap}/files/$key" ]] || exit 22
+'''
+            result = run_bash(['-s'], code=script)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(list(Path(work, 'out').iterdir()), [target])
+            self.assertFalse(Path('/packages-installed-by-assistant.txt').exists())
 
 
 if __name__ == '__main__':
