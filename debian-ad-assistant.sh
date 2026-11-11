@@ -37,6 +37,19 @@
 #   --events         unified operational/audit event center
 #   --install-cli    install adctl/ad-users/... terminal commands
 
+# Fail clearly when launched as "sh script.sh" (dash/busybox) or with an old Bash.
+# Keep this block POSIX sh so non-Bash shells can parse and execute it.
+if [ -z "${BASH_VERSION:-}" ]; then
+    printf '%s\n' "This assistant requires Bash 4+. Run: sudo bash $0 --help" \
+        "Este asistente requiere Bash 4+. Ejecuta: sudo bash $0 --help" >&2
+    exit 2
+fi
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    printf '%s\n' "Bash 4+ is required; found ${BASH_VERSION}." \
+        "Se requiere Bash 4+; versión detectada: ${BASH_VERSION}." >&2
+    exit 2
+fi
+
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
@@ -8384,7 +8397,8 @@ confirm_exact_text() {
 }
 
 earliest_assistant_backup_for_path() {
-    local target="$1" rel="${target#/}" found=""
+    local target="$1"
+    local rel="${target#/}" found=""
     [[ -d "${STATE_DIR}/runs" ]] || return 1
 
     found="$(
@@ -8588,7 +8602,8 @@ create_domain_reset_recovery_bundle() {
 }
 
 create_offline_reset_domain_backup() {
-    local recovery="$1" output="${recovery}/evidence/domain-backup-offline.txt"
+    local recovery="$1"
+    local output="${recovery}/evidence/domain-backup-offline.txt"
 
     [[ -f /var/lib/samba/private/sam.ldb ]] || {
         msg_warn "No sam.ldb found; Samba domain backup skipped."
@@ -9585,7 +9600,8 @@ ids_rule_refresh_source_index() {
 }
 
 ids_rule_enable_source_no_update() {
-    local source="$1" updater="" evidence="${RUN_ROOT}/suricata-enable-${source//\//_}.txt"
+    local source="$1" updater=""
+    local evidence="${RUN_ROOT}/suricata-enable-${source//\//_}.txt"
     updater="$(ids_suricata_update_binary 2>/dev/null || true)"
     [[ -n "$updater" ]] || return 1
     ids_rule_source_is_enabled "$source" && return 0
@@ -9593,7 +9609,8 @@ ids_rule_enable_source_no_update() {
 }
 
 ids_rule_disable_source_no_update() {
-    local source="$1" updater="" evidence="${RUN_ROOT}/suricata-disable-${source//\//_}.txt"
+    local source="$1" updater=""
+    local evidence="${RUN_ROOT}/suricata-disable-${source//\//_}.txt"
     updater="$(ids_suricata_update_binary 2>/dev/null || true)"
     [[ -n "$updater" ]] || return 1
     "$updater" disable-source "$source" >"$evidence" 2>&1

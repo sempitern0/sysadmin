@@ -114,6 +114,8 @@ The [launch guide](docs/DEPLOYMENT.md) covers assistant selection, commit-pinned
 - Start with audit/diagnostics; apply infrastructure changes deliberately with a recovery path.
 - Preserve restorable backups and console access before changing DNS, SSH, firewall or domain membership.
 - RHEL Samba AD DC provisioning is guarded as an unsupported role; see the [platform notes](docs/OPERATIONS.md#control-plane-enterprise-linux).
+- Windows AD assistants started from PowerShell 7 (`pwsh`) or a 32-bit host relaunch themselves in 64-bit Windows PowerShell 5.1, because `Add-Computer`, `Remove-Computer`, `Test-ComputerSecureChannel` and several AD/GPO modules exist only there. Set `ADASSISTANT_NO_ENGINE_HANDOFF=1` to opt out. `-Mode Preflight` runs in the current engine.
+- Linux assistants require Bash 4+ and stop with a clear message when launched as `sh script.sh`; use `sudo bash script.sh`.
 - Platform implementations differ. Neither successful syntax checks nor a hardening run certify production readiness or benchmark compliance.
 
 ## Reference, recovery and maintenance
